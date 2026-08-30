@@ -1,4 +1,5 @@
 const express = require("express")
+const cors = require("cors")
 const dotenv = require("dotenv")
 
 dotenv.config()
@@ -14,7 +15,47 @@ const errorHandler = require("../middleware/errorHandler")
 
 const app = express()
 
-// Dynamic CORS & Preflight Handling Middleware
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:5000",
+  "https://eduhive-lms.vercel.app",
+  "https://eduhive-lms-backend.vercel.app",
+]
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
+      callback(null, true)
+    } else {
+      callback(null, true)
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "X-CSRF-Token",
+    "X-Requested-With",
+    "Accept",
+    "Accept-Version",
+    "Content-Length",
+    "Content-MD5",
+    "Content-Type",
+    "Date",
+    "X-Api-Version",
+    "Authorization",
+    "Origin"
+  ],
+  optionsSuccessStatus: 200,
+}
+
+// 1. Dynamic CORS middleware
+app.use(cors(corsOptions))
+
+// 2. Explicit OPTIONS preflight handling for all routes
+app.options("*", cors(corsOptions))
+
+// Fallback headers middleware for extra safety
 app.use((req, res, next) => {
   const origin = req.headers.origin
   if (origin) {
@@ -22,7 +63,6 @@ app.use((req, res, next) => {
   } else {
     res.setHeader("Access-Control-Allow-Origin", "*")
   }
-
   res.setHeader("Access-Control-Allow-Credentials", "true")
   res.setHeader(
     "Access-Control-Allow-Methods",
@@ -33,7 +73,6 @@ app.use((req, res, next) => {
     "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, Origin"
   )
 
-  // Immediately respond to preflight OPTIONS requests
   if (req.method === "OPTIONS") {
     return res.status(200).end()
   }
