@@ -52,9 +52,6 @@ const corsOptions = {
 // 1. Dynamic CORS middleware
 app.use(cors(corsOptions))
 
-// 2. Explicit OPTIONS preflight handling for all routes
-app.options("*", cors(corsOptions))
-
 // Fallback headers middleware for extra safety
 app.use((req, res, next) => {
   const origin = req.headers.origin
