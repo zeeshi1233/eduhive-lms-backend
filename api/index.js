@@ -31,6 +31,9 @@ app.use((req, res, next) => {
     "Access-Control-Allow-Headers",
     "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, Origin"
   )
+  // Prevent browser from caching preflight responses
+  // This stops "cache poisoning" where a failed preflight blocks all future requests
+  res.setHeader("Access-Control-Max-Age", "0")
 
   // Respond immediately to preflight OPTIONS - before any other middleware
   if (req.method === "OPTIONS") {
