@@ -1,6 +1,12 @@
 const mongoose = require("mongoose")
 const Session = require("../models/Session")
 const StudentCourse = require("../models/StudentCourse")
+const {
+  classroomPath,
+  classroomRoomName,
+  getTeacherAttendanceStatus,
+  isClassLive,
+} = require("./classroom")
 
 const ALLOWED_DURATIONS = ["45 mins", "60 mins", "90 mins", "120 mins"]
 const ALLOWED_TYPES = ["Regular Class", "Extra Class"]
@@ -93,6 +99,11 @@ function formatSession(session) {
   const duration = ALLOWED_DURATIONS.includes(obj.duration) ? obj.duration : obj.duration || "60 mins"
   const endTime = obj.endTime || computeEndTime(obj.startTime, duration)
 
+  const roomName = obj.roomName || classroomRoomName(obj._id)
+  const joinPath = classroomPath(obj._id)
+  const attendance = obj.teacherAttendance || {}
+  const teacherAttendanceStatus = getTeacherAttendanceStatus(obj)
+
   return {
     ...obj,
     courseId: course?._id || obj.course,
@@ -103,10 +114,20 @@ function formatSession(session) {
     duration,
     type: obj.type || "Regular Class",
     status: obj.status || "Scheduled",
-    meetingLink: obj.meetingLink || "",
+    roomName,
+    classroomPath: joinPath,
+    joinUrl: joinPath,
+    meetingLink: joinPath,
     description: obj.description || "",
     topic: obj.topic || "",
     endTime,
+    isLive: isClassLive(obj),
+    canStudentJoin: teacherAttendanceStatus === "checked-in",
+    teacherAttendance: {
+      checkInTime: attendance.checkInTime || null,
+      checkOutTime: attendance.checkOutTime || null,
+      status: teacherAttendanceStatus,
+    },
   }
 }
 

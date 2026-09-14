@@ -811,7 +811,6 @@ exports.createSession = async (req, res) => {
       startTime,
       endTime,
       topic,
-      meetingLink,
       type,
       duration,
       description,
@@ -877,6 +876,9 @@ exports.createSession = async (req, res) => {
       status: resolvedStatus,
     })
 
+    await newSession.save()
+    newSession.roomName = `eduhive-class-${newSession._id}`
+    newSession.meetingLink = `/classroom/${newSession._id}`
     await newSession.save()
     const session = await fetchFormattedSessionById(newSession._id)
 

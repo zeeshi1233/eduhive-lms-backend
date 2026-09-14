@@ -56,6 +56,11 @@ const sessionSchema = new mongoose.Schema(
       default: "",
     },
 
+    roomName: {
+      type: String,
+      default: "",
+    },
+
     status: {
       type: String,
       enum: [

@@ -1,39 +1,25 @@
 const { AccessToken } = require("livekit-server-sdk")
 const mongoose = require("mongoose")
-const Session = require("../models/Session")
 const StudentCourse = require("../models/StudentCourse")
+const { fetchFormattedSessionById } = require("../utils/sessionHelpers")
+const {
+  classroomPath,
+  getParticipantName,
+  loadSessionForClassroom,
+  teacherCheckIn,
+  teacherCheckOut,
+  markStudentPresent,
+  isClassLive,
+} = require("../utils/classroom")
 
-function sanitizeRoomName(name) {
-  return String(name || "")
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 64)
-}
-
-function buildRoomName(sessionId, roomName) {
-  if (sessionId && mongoose.Types.ObjectId.isValid(sessionId)) {
-    return `eduhive-class-${sessionId}`
-  }
-  return sanitizeRoomName(roomName) || "eduhive-classroom"
-}
-
-async function assertSessionAccess(user, sessionId) {
-  if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) return true
-
-  const session = await Session.findById(sessionId).select("course instructor")
-  if (!session) {
-    const error = new Error("Scheduled class not found")
-    error.statusCode = 404
-    throw error
-  }
-
+async function assertSessionAccess(user, session) {
   if (user.role === "admin") return true
 
   if (user.role === "teacher") {
     if (String(session.instructor) !== String(user.profileId)) {
       const error = new Error("You are not assigned to this class")
       error.statusCode = 403
+      error.code = "NOT_ASSIGNED"
       throw error
     }
     return true
@@ -48,6 +34,7 @@ async function assertSessionAccess(user, sessionId) {
     if (!enrolled) {
       const error = new Error("You are not enrolled in this class")
       error.statusCode = 403
+      error.code = "NOT_ENROLLED"
       throw error
     }
     return true
@@ -58,7 +45,7 @@ async function assertSessionAccess(user, sessionId) {
   throw error
 }
 
-exports.getRoomToken = async (req, res) => {
+async function issueClassroomToken(req, res) {
   try {
     const apiKey = process.env.LIVEKIT_API_KEY
     const apiSecret = process.env.LIVEKIT_API_SECRET
@@ -71,24 +58,46 @@ exports.getRoomToken = async (req, res) => {
       })
     }
 
-    const { roomName, participantName, sessionId } = req.body || {}
-    const resolvedRoom = buildRoomName(sessionId, roomName)
+    const { participantName, sessionId } = req.body || {}
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ message: "Valid sessionId is required" })
+    }
 
-    if (!resolvedRoom) {
+    const session = await loadSessionForClassroom(sessionId)
+    await assertSessionAccess(req.user, session)
+
+    if (session.status === "Cancelled") {
       return res.status(400).json({
-        message: "roomName or sessionId is required",
+        message: "This class was cancelled",
+        code: "CLASS_CANCELLED",
       })
     }
 
-    await assertSessionAccess(req.user, sessionId)
+    if (req.user.role === "teacher") {
+      await teacherCheckIn(session)
+    } else if (req.user.role === "student") {
+      if (!isClassLive(session)) {
+        const waiting = !session.teacherAttendance?.checkInTime
+        return res.status(403).json({
+          message: waiting
+            ? "Waiting for instructor to start the class"
+            : "This class has already ended",
+          code: waiting ? "WAITING_FOR_TEACHER" : "CLASS_ENDED",
+          teacherCheckedIn: Boolean(session.teacherAttendance?.checkInTime),
+          teacherCheckedOut: Boolean(session.teacherAttendance?.checkOutTime),
+        })
+      }
+      await markStudentPresent(session, req.user.profileId)
+    } else if (session.teacherAttendance?.checkOutTime) {
+      return res.status(400).json({
+        message: "This class has already ended",
+        code: "CLASS_ENDED",
+      })
+    }
 
-    const displayName =
-      participantName ||
-      req.user.name ||
-      `${req.user.role || "user"}-${String(req.user.profileId || req.user.id).slice(-6)}`
-
+    const displayName = await getParticipantName(req.user, participantName)
     const identity = `${req.user.role || "user"}-${req.user.profileId || req.user.id}`
-    const canPublish = true
+    const roomName = session.roomName
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity,
@@ -97,32 +106,107 @@ exports.getRoomToken = async (req, res) => {
       metadata: JSON.stringify({
         role: req.user.role,
         profileId: req.user.profileId,
+        sessionId: String(session._id),
       }),
     })
 
     at.addGrant({
       roomJoin: true,
-      room: resolvedRoom,
-      canPublish,
+      room: roomName,
+      canPublish: true,
       canSubscribe: true,
       canPublishData: true,
       canUpdateOwnMetadata: true,
     })
 
     const token = await at.toJwt()
+    const formatted = await fetchFormattedSessionById(session._id)
 
     res.status(200).json({
       token,
-      roomName: resolvedRoom,
+      roomName,
+      classroomPath: classroomPath(session._id),
       participantName: displayName,
       identity,
+      role: req.user.role,
       url: livekitUrl,
       livekitUrl,
+      teacherCheckedIn: Boolean(session.teacherAttendance?.checkInTime),
+      teacherCheckInTime: session.teacherAttendance?.checkInTime || null,
+      teacherCheckOutTime: session.teacherAttendance?.checkOutTime || null,
+      session: formatted,
     })
   } catch (error) {
     const status = error.statusCode || 500
     res.status(status).json({
-      message: error.message || "Failed to generate LiveKit token",
+      message: error.message || "Failed to join classroom",
+      code: error.code,
+    })
+  }
+}
+
+exports.getRoomToken = issueClassroomToken
+exports.joinClassroom = issueClassroomToken
+
+exports.leaveClassroom = async (req, res) => {
+  try {
+    const { sessionId } = req.body || {}
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ message: "Valid sessionId is required" })
+    }
+
+    const session = await loadSessionForClassroom(sessionId)
+    await assertSessionAccess(req.user, session)
+
+    if (req.user.role === "teacher") {
+      await teacherCheckOut(session)
+    }
+
+    const formatted = await fetchFormattedSessionById(session._id)
+
+    res.status(200).json({
+      message:
+        req.user.role === "teacher"
+          ? "Class ended. Instructor checked out."
+          : "Left classroom",
+      session: formatted,
+      teacherCheckInTime: session.teacherAttendance?.checkInTime || null,
+      teacherCheckOutTime: session.teacherAttendance?.checkOutTime || null,
+    })
+  } catch (error) {
+    const status = error.statusCode || 500
+    res.status(status).json({
+      message: error.message || "Failed to leave classroom",
+      code: error.code,
+    })
+  }
+}
+
+exports.getClassroom = async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ message: "Valid sessionId is required" })
+    }
+
+    const session = await loadSessionForClassroom(sessionId)
+    await assertSessionAccess(req.user, session)
+
+    const formatted = await fetchFormattedSessionById(session._id)
+
+    res.status(200).json({
+      session: formatted,
+      roomName: formatted.roomName,
+      classroomPath: formatted.classroomPath,
+      isLive: formatted.isLive,
+      canStudentJoin: formatted.canStudentJoin,
+      teacherAttendance: formatted.teacherAttendance,
+    })
+  } catch (error) {
+    const status = error.statusCode || 500
+    res.status(status).json({
+      message: error.message || "Failed to fetch classroom",
+      code: error.code,
     })
   }
 }

@@ -2,7 +2,8 @@ const Course = require("../models/Course")
 const Teacher = require("../models/Teacher")
 const Assignment = require("../models/Assignment")
 const Session = require("../models/Session")
-const { fetchFormattedSessions } = require("../utils/sessionHelpers")
+const { fetchFormattedSessions, fetchFormattedSessionById } = require("../utils/sessionHelpers")
+const { teacherCheckIn, teacherCheckOut } = require("../utils/classroom")
 const Attendance = require("../models/Attendance")
 const Transaction = require("../models/Transaction")
 const StudentCourse = require("../models/StudentCourse")
@@ -270,37 +271,38 @@ exports.markTeacherAttendance = async (req, res) => {
       return res.status(403).json({ message: "Not authorized" })
     }
 
-    // CHECK-IN
+    // CHECK-IN — teacher starts the class
     if (action === "checkin") {
-      if (session.teacherAttendance?.checkInTime) {
-        return res.status(400).json({ message: "Already checked in" })
-      }
-      session.teacherAttendance.checkInTime = new Date()
-      session.status = "ongoing"
-      await session.save()
-      return res.status(200).json({ message: "Session started", status: session.status })
+      await teacherCheckIn(session)
+      const formatted = await fetchFormattedSessionById(session._id)
+      return res.status(200).json({
+        message: "Instructor checked in. Class is live.",
+        status: session.status,
+        checkInTime: session.teacherAttendance.checkInTime,
+        session: formatted,
+      })
     }
 
-    // CHECK-OUT
+    // CHECK-OUT — teacher ends the class
     if (action === "checkout") {
-      if (!session.teacherAttendance?.checkInTime) {
-        return res.status(400).json({ message: "Session not started yet" })
-      }
-      if (session.teacherAttendance?.checkOutTime) {
-        return res.status(400).json({ message: "Already checked out" })
-      }
-      session.teacherAttendance.checkOutTime = new Date()
-      session.status = "conducted"
-      await session.save()
+      await teacherCheckOut(session)
+      const formatted = await fetchFormattedSessionById(session._id)
       return res.status(200).json({
-        message: "Session conducted successfully",
+        message: "Instructor checked out. Class ended.",
         status: session.status,
+        checkInTime: session.teacherAttendance.checkInTime,
+        checkOutTime: session.teacherAttendance.checkOutTime,
+        session: formatted,
       })
     }
 
     return res.status(400).json({ message: "Invalid action" })
   } catch (error) {
-    res.status(500).json({ message: "Failed to update session status", error: error.message })
+    const status = error.statusCode || 500
+    res.status(status).json({
+      message: error.message || "Failed to update session status",
+      code: error.code,
+    })
   }
 }
 

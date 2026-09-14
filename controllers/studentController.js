@@ -440,8 +440,11 @@ exports.markStudentAttendance = async (req, res) => {
       return res.status(404).json({ message: "Session not found" })
     }
 
-    if (session.teacherAttendance?.status !== "checked-in") {
+    if (!session.teacherAttendance?.checkInTime) {
       return res.status(400).json({ message: "Teacher has not checked in yet" })
+    }
+    if (session.teacherAttendance?.checkOutTime) {
+      return res.status(400).json({ message: "This class has already ended" })
     }
 
     for (const record of attendanceData) {
