@@ -13,6 +13,9 @@ const connectDB = async () => {
   }
 }
 
+// test
+
+
 const seedAdmin = async () => {
   try {
     await connectDB()
