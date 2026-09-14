@@ -1,10 +1,11 @@
-const mongoose = require("mongoose");
+const mongoose = require("mongoose")
 
 const sessionSchema = new mongoose.Schema(
   {
     title: {
       type: String,
       required: true,
+      trim: true,
     },
 
     course: {
@@ -19,7 +20,6 @@ const sessionSchema = new mongoose.Schema(
       required: true,
     },
 
-    // 📅 Date & Time
     startTime: {
       type: Date,
       required: true,
@@ -27,30 +27,54 @@ const sessionSchema = new mongoose.Schema(
 
     endTime: {
       type: Date,
-      required: true,
     },
 
-    topic: String,
+    duration: {
+      type: String,
+      enum: ["45 mins", "60 mins", "90 mins", "120 mins"],
+      default: "60 mins",
+    },
+
+    type: {
+      type: String,
+      enum: ["Regular Class", "Extra Class"],
+      default: "Regular Class",
+    },
+
+    topic: {
+      type: String,
+      default: "",
+    },
+
+    description: {
+      type: String,
+      default: "",
+    },
 
     meetingLink: {
       type: String,
-      required: true,
+      default: "",
     },
 
-    // 📌 SESSION STATUS
     status: {
       type: String,
-      enum: ["pending", "ongoing", "conducted"],
-      default: "pending",
+      enum: [
+        "Scheduled",
+        "pending",
+        "ongoing",
+        "conducted",
+        "not_conducted",
+        "Cancelled",
+        "completed",
+      ],
+      default: "Scheduled",
     },
 
-    // 👨‍🏫 Teacher Attendance
     teacherAttendance: {
       checkInTime: Date,
       checkOutTime: Date,
     },
 
-    // 👨‍🎓 Student Attendance
     studentAttendance: [
       {
         student: {
@@ -66,13 +90,34 @@ const sessionSchema = new mongoose.Schema(
       },
     ],
 
+    perClassFee: {
+      type: Number,
+      default: 0,
+    },
+
     isPaid: {
       type: Boolean,
       default: false,
     },
     paidAt: Date,
   },
-  { timestamps: true },
-);
+  { timestamps: true }
+)
 
-module.exports = mongoose.model("Session", sessionSchema);
+sessionSchema.pre("validate", function (next) {
+  if (!this.duration) this.duration = "60 mins"
+  if (!this.type) this.type = "Regular Class"
+  if (!this.status) this.status = "Scheduled"
+
+  if (!this.endTime && this.startTime) {
+    const minutes = parseInt(this.duration, 10) || 60
+    this.endTime = new Date(this.startTime.getTime() + minutes * 60 * 1000)
+  }
+
+  next()
+})
+
+sessionSchema.index({ course: 1, startTime: 1 })
+sessionSchema.index({ instructor: 1, startTime: 1 })
+
+module.exports = mongoose.model("Session", sessionSchema)

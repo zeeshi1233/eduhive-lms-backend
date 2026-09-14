@@ -7,6 +7,7 @@ const Complaint = require("../models/Complaint")
 const Payment = require("../models/Payment")
 const Transaction = require("../models/Transaction")
 const Session = require("../models/Session")
+const { fetchFormattedSessions, studentSessionFilter } = require("../utils/sessionHelpers")
 
 // =========================
 // Get Enrolled Courses
@@ -409,21 +410,12 @@ exports.getStudentSessions = async (req, res) => {
   try {
     const studentId = req.user.profileId
 
-    // Enrolled course IDs nikalo via StudentCourse
-    const enrollments = await StudentCourse.find({ studentId }).select("courseId")
-    const enrolledCourseIds = enrollments.map((e) => e.courseId)
-
-    if (!enrolledCourseIds.length) {
+    const filter = await studentSessionFilter(studentId)
+    if (!filter) {
       return res.status(200).json({ success: true, count: 0, sessions: [] })
     }
 
-    // Sessions fetch karo (directly by courseId — no Course.sessions[] needed)
-    const sessions = await Session.find({
-      course: { $in: enrolledCourseIds },
-    })
-      .populate("course", "title")
-      .populate("instructor", "name")
-      .sort({ startTime: -1 })
+    const sessions = await fetchFormattedSessions(filter)
 
     res.status(200).json({
       success: true,

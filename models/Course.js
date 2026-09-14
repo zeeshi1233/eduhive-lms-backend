@@ -7,6 +7,12 @@ const courseSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
+    code: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+    },
     title: {
       type: String,
       required: true,
@@ -59,5 +65,15 @@ const courseSchema = new mongoose.Schema(
   },
   { timestamps: true }
 )
+
+const withCourseCode = (_doc, ret) => {
+  ret.code = ret.code || ret.serialNumber || ""
+  ret.courseCode = ret.code
+  return ret
+}
+
+courseSchema.set("toJSON", { virtuals: true, transform: withCourseCode })
+courseSchema.set("toObject", { virtuals: true, transform: withCourseCode })
+courseSchema.index({ title: 1, board: 1 })
 
 module.exports = mongoose.model("Course", courseSchema)

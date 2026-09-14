@@ -10,6 +10,21 @@ const { buildTeacherPayload } = require("../utils/teacherPayload")
 const { syncTeacherCourseAssignments } = require("../utils/courseAssignment")
 const { default: mongoose } = require("mongoose")
 const Session = require("../models/Session")
+const {
+  ALLOWED_DURATIONS,
+  ALLOWED_TYPES,
+  computeEndTime,
+  normalizeStatus,
+  isAllowedStatus,
+  generateCourseCode,
+  fetchFormattedSessions,
+  fetchFormattedSessionById,
+  studentSessionFilter,
+} = require("../utils/sessionHelpers")
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
 
 // =========================
 // Admin Login
@@ -274,17 +289,42 @@ exports.createCourse = async (req, res) => {
       perHourFee,
       board,
       otherBoard,
+      code,
+      courseCode,
     } = req.body
     const courseImage = req.file?.path || null
+    const resolvedBoard = board === "Other" ? otherBoard : board
+    const resolvedCode =
+      code || courseCode || serialNumber || generateCourseCode(title, resolvedBoard)
+
+    if (title && resolvedBoard) {
+      const duplicate = await Course.findOne({
+        title: new RegExp(`^${escapeRegex(title)}$`, "i"),
+        board: new RegExp(`^${escapeRegex(resolvedBoard)}$`, "i"),
+      })
+      if (duplicate) {
+        return res.status(409).json({
+          message: "A course with this title and board already exists",
+        })
+      }
+    }
+
+    const codeTaken = await Course.findOne({
+      $or: [{ code: resolvedCode }, { serialNumber: resolvedCode }],
+    })
+    if (codeTaken) {
+      return res.status(409).json({ message: "Course code must be unique" })
+    }
 
     const newCourse = new Course({
-      serialNumber,
+      serialNumber: serialNumber || resolvedCode,
+      code: resolvedCode,
       title,
       description,
       feePKR,
       feeUSD,
       perHourFee,
-      board,
+      board: resolvedBoard,
       otherBoard,
       courseImage,
     })
@@ -292,6 +332,9 @@ exports.createCourse = async (req, res) => {
 
     res.status(201).json({ message: "Course created successfully", course: newCourse })
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Course code must be unique" })
+    }
     res.status(500).json({ message: "Failed to create course", error: error.message })
   }
 }
@@ -311,11 +354,17 @@ exports.getCourses = async (req, res) => {
       enrollMap[String(e.courseId)].push(e.studentId)
     })
 
-    const result = courses.map((course) => ({
-      ...course.toObject(),
-      students: enrollMap[String(course._id)] || [],
-      studentCount: (enrollMap[String(course._id)] || []).length,
-    }))
+    const result = courses.map((course) => {
+      const obj = course.toObject()
+      const resolvedCode = obj.code || obj.serialNumber || ""
+      return {
+        ...obj,
+        code: resolvedCode,
+        courseCode: resolvedCode,
+        students: enrollMap[String(course._id)] || [],
+        studentCount: (enrollMap[String(course._id)] || []).length,
+      }
+    })
 
     res.status(200).json({ courses: result })
   } catch (error) {
@@ -323,14 +372,108 @@ exports.getCourses = async (req, res) => {
   }
 }
 
+exports.getCourseById = async (req, res) => {
+  try {
+    const { id } = req.params
+    let course = mongoose.Types.ObjectId.isValid(id) ? await Course.findById(id).populate("instructor", "name email") : null
+
+    if (!course) {
+      course = await Course.findOne({
+        $or: [{ code: id }, { serialNumber: id }],
+      }).populate("instructor", "name email")
+    }
+
+    if (!course) return res.status(404).json({ message: "Course not found" })
+
+    const enrollments = await StudentCourse.find({ courseId: course._id }).populate("studentId", "name")
+    const students = enrollments.map((e) => e.studentId)
+    const obj = course.toObject()
+    const resolvedCode = obj.code || obj.serialNumber || ""
+
+    res.status(200).json({
+      course: {
+        ...obj,
+        code: resolvedCode,
+        courseCode: resolvedCode,
+        students,
+        studentCount: students.length,
+      },
+    })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch course", error: error.message })
+  }
+}
+
 exports.updateCourse = async (req, res) => {
   try {
     const { id } = req.params
-    const course = await Course.findByIdAndUpdate(id, req.body, { new: true })
+    const course = await Course.findById(id)
     if (!course) return res.status(404).json({ message: "Course not found" })
+
+    const {
+      serialNumber,
+      title,
+      description,
+      feePKR,
+      feeUSD,
+      perHourFee,
+      board,
+      otherBoard,
+      code,
+      courseCode,
+      isActive,
+    } = req.body
+
+    const nextTitle = title ?? course.title
+    const resolvedBoard =
+      board === "Other" ? otherBoard : board !== undefined ? board : course.board
+    const resolvedCode =
+      code || courseCode || serialNumber || course.code || course.serialNumber
+
+    if (nextTitle && resolvedBoard) {
+      const duplicate = await Course.findOne({
+        _id: { $ne: course._id },
+        title: new RegExp(`^${escapeRegex(nextTitle)}$`, "i"),
+        board: new RegExp(`^${escapeRegex(resolvedBoard)}$`, "i"),
+      })
+      if (duplicate) {
+        return res.status(409).json({
+          message: "A course with this title and board already exists",
+        })
+      }
+    }
+
+    if (resolvedCode) {
+      const codeTaken = await Course.findOne({
+        _id: { $ne: course._id },
+        $or: [{ code: resolvedCode }, { serialNumber: resolvedCode }],
+      })
+      if (codeTaken) {
+        return res.status(409).json({ message: "Course code must be unique" })
+      }
+    }
+
+    if (title !== undefined) course.title = title
+    if (description !== undefined) course.description = description
+    if (feePKR !== undefined) course.feePKR = feePKR
+    if (feeUSD !== undefined) course.feeUSD = feeUSD
+    if (perHourFee !== undefined) course.perHourFee = perHourFee
+    if (resolvedBoard !== undefined) course.board = resolvedBoard
+    if (otherBoard !== undefined) course.otherBoard = otherBoard
+    if (isActive !== undefined) course.isActive = isActive
+    if (req.file?.path) course.courseImage = req.file.path
+    if (resolvedCode) {
+      course.code = resolvedCode
+      course.serialNumber = serialNumber || course.serialNumber || resolvedCode
+    }
+
+    await course.save()
 
     res.status(200).json({ message: "Course updated successfully", course })
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Course code must be unique" })
+    }
     res.status(500).json({ message: "Failed to update course", error: error.message })
   }
 }
@@ -661,34 +804,90 @@ exports.payTeacherSalaryBySession = async (req, res) => {
 
 exports.createSession = async (req, res) => {
   try {
-    const { title, courseId, startTime, endTime, topic, meetingLink, teacherId } = req.body
-
-    if (!meetingLink) {
-      return res.status(400).json({ message: "Meeting link is required" })
-    }
-
-    if (!startTime || !endTime) {
-      return res.status(400).json({ message: "Start and end time are required" })
-    }
-
-    // Course.sessions[] ab nahi hai — Session directly save hogi courseId ke saath
-    const newSession = new Session({
+    const {
       title,
-      course: courseId,
-      instructor: teacherId,
+      courseId,
+      teacherId,
       startTime,
       endTime,
       topic,
       meetingLink,
+      type,
+      duration,
+      description,
+      status,
+    } = req.body
+
+    if (!title || !courseId || !teacherId || !startTime) {
+      return res.status(400).json({
+        message: "title, courseId, teacherId and startTime are required",
+      })
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(courseId) || !mongoose.Types.ObjectId.isValid(teacherId)) {
+      return res.status(400).json({ message: "Valid courseId and teacherId are required" })
+    }
+
+    const parsedStart = new Date(startTime)
+    if (Number.isNaN(parsedStart.getTime())) {
+      return res.status(400).json({ message: "Invalid startTime" })
+    }
+
+    if (duration && !ALLOWED_DURATIONS.includes(duration)) {
+      return res.status(400).json({
+        message: `duration must be one of: ${ALLOWED_DURATIONS.join(", ")}`,
+      })
+    }
+
+    if (type && !ALLOWED_TYPES.includes(type)) {
+      return res.status(400).json({
+        message: "type must be Regular Class or Extra Class",
+      })
+    }
+
+    const resolvedDuration = duration || "60 mins"
+    const resolvedEndTime = endTime ? new Date(endTime) : computeEndTime(parsedStart, resolvedDuration)
+    if (!resolvedEndTime || Number.isNaN(new Date(resolvedEndTime).getTime())) {
+      return res.status(400).json({ message: "Unable to determine endTime from startTime and duration" })
+    }
+
+    const resolvedStatus = normalizeStatus(status || "Scheduled")
+    if (!isAllowedStatus(resolvedStatus)) {
+      return res.status(400).json({ message: "Invalid status" })
+    }
+
+    const [course, teacher] = await Promise.all([
+      Course.findById(courseId),
+      Teacher.findById(teacherId),
+    ])
+    if (!course) return res.status(404).json({ message: "Course not found" })
+    if (!teacher) return res.status(404).json({ message: "Teacher not found" })
+
+    const newSession = new Session({
+      title,
+      course: courseId,
+      instructor: teacherId,
+      startTime: parsedStart,
+      endTime: resolvedEndTime,
+      topic: topic || "",
+      meetingLink: meetingLink || "",
+      type: type || "Regular Class",
+      duration: resolvedDuration,
+      description: description || "",
+      status: resolvedStatus,
     })
 
     await newSession.save()
+    const session = await fetchFormattedSessionById(newSession._id)
 
     res.status(201).json({
-      message: "Session created successfully",
-      session: newSession,
+      message: "Session created",
+      session,
     })
   } catch (error) {
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ message: error.message })
+    }
     res.status(500).json({
       message: "Failed to create session",
       error: error.message,
@@ -704,10 +903,88 @@ exports.getAllSessions = async (req, res) => {
     if (teacherId) filter.instructor = teacherId
     if (courseId) filter.course = courseId
 
-    const sessions = await Session.find(filter)
-      .populate("course", "title")
-      .populate("instructor", "name")
-      .sort({ startTime: -1 })
+    const sessions = await fetchFormattedSessions(filter)
+
+    res.status(200).json({
+      success: true,
+      count: sessions.length,
+      sessions,
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch sessions",
+      error: error.message,
+    })
+  }
+}
+
+exports.updateSession = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { status } = req.body
+
+    if (!status) {
+      return res.status(400).json({ message: "status is required" })
+    }
+
+    const resolvedStatus = normalizeStatus(status)
+    if (!isAllowedStatus(resolvedStatus)) {
+      return res.status(400).json({
+        message: "status must be Scheduled, conducted, not_conducted or Cancelled",
+      })
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid session id" })
+    }
+
+    const updated = await Session.findByIdAndUpdate(
+      id,
+      { status: resolvedStatus },
+      { new: true, runValidators: true }
+    )
+
+    if (!updated) {
+      return res.status(404).json({ message: "Session not found" })
+    }
+
+    const session = await fetchFormattedSessionById(updated._id)
+
+    res.status(200).json({
+      message: "Status updated",
+      session,
+    })
+  } catch (error) {
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ message: error.message })
+    }
+    res.status(500).json({
+      message: "Failed to update session",
+      error: error.message,
+    })
+  }
+}
+
+exports.listSessionsForCurrentUser = async (req, res) => {
+  try {
+    const { teacherId, courseId } = req.query
+    const filter = {}
+
+    if (req.user.role === "teacher") {
+      filter.instructor = req.user.profileId
+    } else if (req.user.role === "student") {
+      const studentFilter = await studentSessionFilter(req.user.profileId)
+      if (!studentFilter) {
+        return res.status(200).json({ success: true, count: 0, sessions: [] })
+      }
+      Object.assign(filter, studentFilter)
+    } else if (teacherId) {
+      filter.instructor = teacherId
+    }
+
+    if (courseId) filter.course = courseId
+
+    const sessions = await fetchFormattedSessions(filter)
 
     res.status(200).json({
       success: true,

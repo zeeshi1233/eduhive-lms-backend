@@ -2,6 +2,7 @@ const Course = require("../models/Course")
 const Teacher = require("../models/Teacher")
 const Assignment = require("../models/Assignment")
 const Session = require("../models/Session")
+const { fetchFormattedSessions } = require("../utils/sessionHelpers")
 const Attendance = require("../models/Attendance")
 const Transaction = require("../models/Transaction")
 const StudentCourse = require("../models/StudentCourse")
@@ -436,10 +437,7 @@ exports.getAllSessions = async (req, res) => {
     const filter = { instructor: teacherId }
     if (courseId) filter.course = courseId
 
-    const sessions = await Session.find(filter)
-      .populate("course", "title")
-      .populate("instructor", "name")
-      .sort({ startTime: -1 })
+    const sessions = await fetchFormattedSessions(filter)
 
     res.status(200).json({
       success: true,

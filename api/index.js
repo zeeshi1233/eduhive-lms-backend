@@ -9,6 +9,9 @@ const authRoutes = require("../routes/auth")
 const adminRoutes = require("../routes/admin")
 const teacherRoutes = require("../routes/teacher")
 const studentRoutes = require("../routes/student")
+const livekitRoutes = require("../routes/livekit")
+const { verifyToken } = require("../middleware/auth")
+const { listSessionsForCurrentUser } = require("../controllers/adminController")
 
 const errorHandler = require("../middleware/errorHandler")
 
@@ -77,6 +80,8 @@ app.use("/api/auth", authRoutes)
 app.use("/api/admin", adminRoutes)
 app.use("/api/teacher", teacherRoutes)
 app.use("/api/student", studentRoutes)
+app.use("/api", livekitRoutes)
+app.get("/api/sessions", verifyToken, listSessionsForCurrentUser)
 
 // Health check
 app.get("/api/health", (req, res) => {

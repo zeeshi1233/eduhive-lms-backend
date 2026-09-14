@@ -68,9 +68,11 @@ exports.validateTeacherUpdateInput = [
 ]
 
 exports.validateCourseInput = [
-  body("serialNumber").notEmpty().trim(),
   body("title").notEmpty().trim(),
   body("description").notEmpty().trim(),
+  body("serialNumber").optional().trim(),
+  body("code").optional().trim(),
+  body("courseCode").optional().trim(),
   body("feePKR").optional().isFloat({ min: 0 }).toFloat(),
   body("feeUSD").optional().isFloat({ min: 0 }).toFloat(),
   body("perHourFee").optional().isFloat({ min: 0 }).toFloat(),

@@ -25,6 +25,8 @@ const {
   getAllSessions,
   enrollStudentInCourse,
   updateEnrollmentStatus,
+  getCourseById,
+  updateSession,
 } = require("../controllers/adminController")
 const { verifyToken, authorize } = require("../middleware/auth")
 const {
@@ -75,6 +77,7 @@ router.delete("/students/:id", deleteStudent)
 // --------------------
 router.post("/courses", upload.single("courseImage"), validateCourseInput, handleValidationErrors, createCourse)
 router.get("/courses", getCourses)
+router.get("/courses/:id", getCourseById)
 router.put("/courses/:id", upload.single("courseImage"), updateCourse)
 router.delete("/courses/:id", deleteCourse)
 router.post("/courses/assign-teacher", assignTeacherToCourse)
@@ -106,5 +109,7 @@ router.get("/teachers/:teacherId/sessions", getSessionsByTeacherForPayroll)
 router.post("/teachers/pay-salary", payTeacherSalaryBySession)
 router.post("/sessions", createSession)
 router.get("/sessions", getAllSessions)
+router.put("/sessions/:id", updateSession)
+router.patch("/sessions/:id", updateSession)
 
 module.exports = router
