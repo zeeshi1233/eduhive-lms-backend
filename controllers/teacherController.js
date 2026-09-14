@@ -70,43 +70,93 @@ exports.getAssignedCourses = async (req, res) => {
 exports.getTeacherDashboardStats = async (req, res) => {
   try {
     const teacherId = req.user.profileId
+    const teacher = await Teacher.findById(teacherId).select("assignedCourses")
+    const assignedIds = teacher?.assignedCourses || []
 
-    // Teacher ke courses
-    const courses = await Course.find({ instructor: teacherId })
+    const courses = await Course.find({
+      $or: [{ instructor: teacherId }, { _id: { $in: assignedIds } }],
+    }).select("_id title")
     const courseIds = courses.map((c) => c._id)
 
-    // Unique students via StudentCourse
-    const enrollments = await StudentCourse.find({ courseId: { $in: courseIds } }).select(
-      "studentId"
+    const [enrollments, sessions] = await Promise.all([
+      StudentCourse.find({
+        courseId: { $in: courseIds },
+        status: { $ne: "dropped" },
+      })
+        .populate("studentId", "name")
+        .populate("courseId", "title")
+        .sort({ enrolledAt: -1 }),
+      Session.find({ instructor: teacherId }).select(
+        "startTime endTime status duration teacherAttendance type title"
+      ),
+    ])
+
+    const uniqueStudentIds = new Set(
+      enrollments.map((e) => String(e.studentId?._id || e.studentId)).filter((id) => id !== "undefined")
     )
-    const uniqueStudentIds = [...new Set(enrollments.map((e) => String(e.studentId)))]
-    const totalStudents = uniqueStudentIds.length
-
     const now = new Date()
+    const endedStatuses = ["conducted", "completed", "Cancelled", "not_conducted"]
 
-    // Upcoming classes
-    const upcomingClasses = await Session.countDocuments({
-      instructor: teacherId,
-      startTime: { $gt: now },
-    })
+    const upcomingClasses = sessions.filter((s) => {
+      const start = new Date(s.startTime)
+      return start > now && !endedStatuses.includes(s.status)
+    }).length
 
-    // Total hours taught
-    const completedSessions = await Session.find({
-      instructor: teacherId,
-      endTime: { $lt: now },
-    })
+    const conductedClasses = sessions.filter(
+      (s) => s.status === "conducted" || s.status === "completed"
+    ).length
+
+    const liveClasses = sessions.filter((s) => {
+      const checkedIn = Boolean(s.teacherAttendance?.checkInTime)
+      const checkedOut = Boolean(s.teacherAttendance?.checkOutTime)
+      return s.status === "ongoing" || (checkedIn && !checkedOut)
+    }).length
 
     let totalHoursTaught = 0
-    completedSessions.forEach((session) => {
-      const hours =
-        (new Date(session.endTime) - new Date(session.startTime)) / (1000 * 60 * 60)
-      totalHoursTaught += hours
+    sessions.forEach((session) => {
+      const conducted =
+        session.status === "conducted" ||
+        session.status === "completed" ||
+        Boolean(session.teacherAttendance?.checkOutTime)
+      if (!conducted) return
+      const start = new Date(session.startTime)
+      const end = session.endTime
+        ? new Date(session.endTime)
+        : new Date(start.getTime() + (parseInt(session.duration, 10) || 60) * 60 * 1000)
+      const hours = (end - start) / (1000 * 60 * 60)
+      if (hours > 0 && hours <= 8) totalHoursTaught += hours
     })
 
+    const monthlySessions = []
+    for (let i = 5; i >= 0; i -= 1) {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1)
+      const count = sessions.filter((s) => {
+        const t = new Date(s.startTime)
+        return t >= start && t < end
+      }).length
+      monthlySessions.push({
+        month: start.toLocaleString("en-US", { month: "short" }),
+        year: start.getFullYear(),
+        count,
+      })
+    }
+
+    const recentEnrollments = enrollments.slice(0, 8).map((e) => ({
+      studentName: e.studentId?.name || "Student",
+      courseTitle: e.courseId?.title || "Course",
+      enrolledAt: e.enrolledAt || e.createdAt,
+    }))
+
     res.status(200).json({
-      totalStudents,
+      totalStudents: uniqueStudentIds.size,
       upcomingClasses,
+      conductedClasses,
+      liveClasses,
+      totalSessions: sessions.length,
       totalHoursTaught: Number(totalHoursTaught.toFixed(2)),
+      monthlySessions,
+      recentEnrollments,
     })
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch dashboard stats", error: error.message })
