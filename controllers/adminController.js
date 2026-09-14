@@ -970,17 +970,23 @@ exports.listSessionsForCurrentUser = async (req, res) => {
   try {
     const { teacherId, courseId } = req.query
     const filter = {}
+    const role = req.user.role
 
-    if (req.user.role === "teacher") {
+    if (role === "admin") {
+      // Admin can see all sessions; optional query filters still apply
+      if (teacherId) filter.instructor = teacherId
+    } else if (role === "teacher") {
+      // Only sessions assigned to this teacher
       filter.instructor = req.user.profileId
-    } else if (req.user.role === "student") {
+    } else if (role === "student") {
+      // Only sessions for courses this student is enrolled in
       const studentFilter = await studentSessionFilter(req.user.profileId)
       if (!studentFilter) {
         return res.status(200).json({ success: true, count: 0, sessions: [] })
       }
       Object.assign(filter, studentFilter)
-    } else if (teacherId) {
-      filter.instructor = teacherId
+    } else {
+      return res.status(403).json({ message: "Access denied" })
     }
 
     if (courseId) filter.course = courseId

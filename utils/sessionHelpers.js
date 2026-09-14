@@ -149,12 +149,17 @@ async function fetchFormattedSessionById(id) {
 }
 
 async function studentSessionFilter(studentId) {
+  if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) return null
+
   const enrollments = await StudentCourse.find({
     studentId,
-    status: { $ne: "dropped" },
+    status: { $in: ["active", "completed"] },
   }).select("courseId")
 
-  const enrolledCourseIds = enrollments.map((e) => e.courseId)
+  const enrolledCourseIds = enrollments
+    .map((e) => e.courseId)
+    .filter(Boolean)
+
   if (!enrolledCourseIds.length) return null
   return { course: { $in: enrolledCourseIds } }
 }
