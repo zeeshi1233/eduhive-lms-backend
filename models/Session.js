@@ -109,7 +109,7 @@ const sessionSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
-sessionSchema.pre("validate", function (next) {
+sessionSchema.pre("validate", function () {
   if (!this.duration) this.duration = "60 mins"
   if (!this.type) this.type = "Regular Class"
   if (!this.status) this.status = "Scheduled"
@@ -118,8 +118,6 @@ sessionSchema.pre("validate", function (next) {
     const minutes = parseInt(this.duration, 10) || 60
     this.endTime = new Date(this.startTime.getTime() + minutes * 60 * 1000)
   }
-
-  next()
 })
 
 sessionSchema.index({ course: 1, startTime: 1 })
