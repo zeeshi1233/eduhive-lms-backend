@@ -869,7 +869,6 @@ exports.createSession = async (req, res) => {
       startTime: parsedStart,
       endTime: resolvedEndTime,
       topic: topic || "",
-      meetingLink: meetingLink || "",
       type: type || "Regular Class",
       duration: resolvedDuration,
       description: description || "",
