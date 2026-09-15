@@ -54,6 +54,17 @@ const buildTeacherPayload = (data) => {
     }
   })
 
+  if (payload.gender !== undefined) {
+    const g = String(payload.gender || "").trim().toLowerCase()
+    payload.gender = ["male", "female", "other"].includes(g) ? g : undefined
+  }
+
+  // specialization removed from UI — always derive a safe default
+  payload.specialization =
+    (payload.specialization && String(payload.specialization).trim()) ||
+    payload.qualification ||
+    "General"
+
   if (payload.assignedCourses !== undefined) {
     payload.assignedCourses = normalizeObjectIdArray(payload.assignedCourses)
   }

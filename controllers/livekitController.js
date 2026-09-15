@@ -9,6 +9,7 @@ const {
   teacherCheckIn,
   teacherCheckOut,
   markStudentPresent,
+  markStudentLeft,
   isClassLive,
 } = require("../utils/classroom")
 
@@ -160,6 +161,8 @@ exports.leaveClassroom = async (req, res) => {
 
     if (req.user.role === "teacher") {
       await teacherCheckOut(session)
+    } else if (req.user.role === "student") {
+      await markStudentLeft(session, req.user.profileId)
     }
 
     const formatted = await fetchFormattedSessionById(session._id)

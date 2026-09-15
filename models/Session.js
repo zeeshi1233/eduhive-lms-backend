@@ -75,6 +75,12 @@ const sessionSchema = new mongoose.Schema(
       default: "Scheduled",
     },
 
+    notConductedReason: {
+      type: String,
+      enum: ["Teacher Not Present", "Student Not Present", "Others"],
+      default: undefined,
+    },
+
     teacherAttendance: {
       checkInTime: Date,
       checkOutTime: Date,
@@ -88,6 +94,8 @@ const sessionSchema = new mongoose.Schema(
           required: true,
         },
         present: Boolean,
+        joinedAt: Date,
+        leftAt: Date,
         markedAt: {
           type: Date,
           default: Date.now,

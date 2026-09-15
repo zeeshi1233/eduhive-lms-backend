@@ -63,22 +63,40 @@ exports.register = async (req, res) => {
 
     // -------- STUDENT --------
     if (role === "student") {
-      // Build student profile (without email/password)
       const {
         email: _email,
         password: _password,
         role: _role,
-        ...studentData
+        enrolledCourses: _enrolledCourses,
+        "enrolledCourses[]": _enrolledCoursesArr,
+        ...rawStudent
       } = req.body
+
+      const studentData = { ...rawStudent }
 
       if (req.file) {
         studentData.profileImage = req.file.path
       }
 
+      // Normalize enums / required legacy fields so FormData registration succeeds
+      if (studentData.gender) {
+        studentData.gender = String(studentData.gender).trim().toLowerCase()
+      }
+      if (!studentData.address) studentData.address = "N/A"
+      if (!studentData.dateOfBirth) studentData.dateOfBirth = new Date("2000-01-01")
+      if (!studentData.feePlan) studentData.feePlan = "monthly"
+      if (studentData.totalFees === undefined || studentData.totalFees === "") {
+        studentData.totalFees = 0
+      } else {
+        studentData.totalFees = Number(studentData.totalFees) || 0
+      }
+      if (studentData.admissionDate) {
+        studentData.admissionDate = new Date(studentData.admissionDate)
+      }
+
       const student = new Student(studentData)
       await student.save()
 
-      // Create Auth record
       const auth = new Auth({
         email,
         password,

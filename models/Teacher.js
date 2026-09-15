@@ -8,7 +8,7 @@ const TeacherSchema = new mongoose.Schema(
     address: String,
 
     qualification: { type: String, required: true },
-    specialization: { type: String, required: true },
+    specialization: { type: String, default: "" },
 
     experienceYears: { type: Number, default: 0 },
 

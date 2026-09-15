@@ -3,6 +3,9 @@ const Teacher = require("../models/Teacher")
 const Student = require("../models/Student")
 const Admin = require("../models/Admin")
 
+const MIN_CONDUCTED_RATIO = 0.5 // at least 50% of scheduled duration
+const MIN_CONDUCTED_MINUTES = 15
+
 function classroomPath(sessionId) {
   return `/classroom/${sessionId}`
 }
@@ -20,6 +23,11 @@ function getTeacherAttendanceStatus(session) {
 
 function isClassLive(session) {
   return getTeacherAttendanceStatus(session) === "checked-in"
+}
+
+function parseDurationMinutes(duration) {
+  const minutes = parseInt(duration, 10)
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : 60
 }
 
 function ensureRoomFields(session) {
@@ -59,6 +67,29 @@ async function teacherCheckIn(session) {
   return session
 }
 
+function resolveAutoStatus(session, checkOutTime) {
+  const checkIn = session.teacherAttendance?.checkInTime
+    ? new Date(session.teacherAttendance.checkInTime)
+    : null
+  if (!checkIn || Number.isNaN(checkIn.getTime())) {
+    return { status: "not_conducted", notConductedReason: "Teacher Not Present" }
+  }
+
+  const elapsedMs = Math.max(0, new Date(checkOutTime).getTime() - checkIn.getTime())
+  const elapsedMins = elapsedMs / 60000
+  const scheduledMins = parseDurationMinutes(session.duration)
+  const minRequired = Math.max(MIN_CONDUCTED_MINUTES, scheduledMins * MIN_CONDUCTED_RATIO)
+
+  if (elapsedMins >= minRequired) {
+    return { status: "conducted", notConductedReason: "" }
+  }
+
+  return {
+    status: "not_conducted",
+    notConductedReason: session.notConductedReason || "Others",
+  }
+}
+
 async function teacherCheckOut(session) {
   if (!session.teacherAttendance?.checkInTime) {
     const error = new Error("Class has not started yet")
@@ -68,8 +99,21 @@ async function teacherCheckOut(session) {
   }
 
   if (!session.teacherAttendance.checkOutTime) {
-    session.set("teacherAttendance.checkOutTime", new Date())
-    session.status = "conducted"
+    const checkOutTime = new Date()
+    session.set("teacherAttendance.checkOutTime", checkOutTime)
+
+    // Only auto-resolve if still live/scheduled — preserve manual conducted/not_conducted
+    const current = String(session.status || "").toLowerCase()
+    if (current === "ongoing" || current === "scheduled" || current === "pending") {
+      const resolved = resolveAutoStatus(session, checkOutTime)
+      session.status = resolved.status
+      if (resolved.status === "not_conducted") {
+        session.notConductedReason = resolved.notConductedReason || "Others"
+      } else {
+        session.notConductedReason = undefined
+      }
+    }
+
     await session.save()
   }
 
@@ -80,22 +124,41 @@ async function markStudentPresent(session, studentId) {
   if (!studentId) return session
   if (!Array.isArray(session.studentAttendance)) session.studentAttendance = []
 
+  const now = new Date()
   const existing = session.studentAttendance.find(
     (record) => String(record.student) === String(studentId)
   )
 
   if (existing) {
     existing.present = true
-    existing.markedAt = new Date()
+    existing.markedAt = now
+    if (!existing.joinedAt) existing.joinedAt = now
+    existing.leftAt = undefined
   } else {
     session.studentAttendance.push({
       student: studentId,
       present: true,
-      markedAt: new Date(),
+      joinedAt: now,
+      markedAt: now,
     })
   }
 
   await session.save()
+  return session
+}
+
+async function markStudentLeft(session, studentId) {
+  if (!studentId) return session
+  if (!Array.isArray(session.studentAttendance)) return session
+
+  const existing = session.studentAttendance.find(
+    (record) => String(record.student) === String(studentId)
+  )
+  if (existing) {
+    existing.leftAt = new Date()
+    existing.markedAt = new Date()
+    await session.save()
+  }
   return session
 }
 
@@ -138,6 +201,10 @@ module.exports = {
   teacherCheckIn,
   teacherCheckOut,
   markStudentPresent,
+  markStudentLeft,
   getParticipantName,
   loadSessionForClassroom,
+  resolveAutoStatus,
+  MIN_CONDUCTED_MINUTES,
+  MIN_CONDUCTED_RATIO,
 }

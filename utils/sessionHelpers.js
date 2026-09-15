@@ -67,12 +67,19 @@ function generateCourseCode(title, board) {
 
 function formatCourse(course) {
   if (!course) return course
-  if (typeof course !== "object") return course
+  if (typeof course !== "object") return { _id: course, title: "", board: "", code: "" }
+
+  // Unpopulated ObjectId — do not treat as a course document
+  if (course instanceof mongoose.Types.ObjectId || course._bsontype === "ObjectId") {
+    return { _id: course, title: "", board: "", code: "" }
+  }
+
   const obj = course.toObject ? course.toObject() : { ...course }
   const code = obj.code || obj.serialNumber || ""
+  const title = obj.title || obj.name || obj.courseTitle || obj.courseName || ""
   return {
     _id: obj._id,
-    title: obj.title,
+    title,
     board: obj.board || "",
     code,
     serialNumber: obj.serialNumber || code,
@@ -109,11 +116,16 @@ function formatSession(session) {
     courseId: course?._id || obj.course,
     teacherId: instructor?._id || obj.instructor,
     course,
+    courseTitle:
+      (course && typeof course === "object" && (course.title || course.code)) ||
+      obj.title ||
+      "",
     instructor,
     teacher: instructor,
     duration,
     type: obj.type || "Regular Class",
     status: obj.status || "Scheduled",
+    notConductedReason: obj.notConductedReason || "",
     roomName,
     classroomPath: joinPath,
     joinUrl: joinPath,

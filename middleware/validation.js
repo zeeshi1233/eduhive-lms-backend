@@ -12,10 +12,18 @@ exports.validateRegisterInput = [
   body("password").isLength({ min: 6 }),
   body("name").notEmpty().trim(),
   body("phone").if(body("role").equals("teacher")).notEmpty().trim().isLength({ min: 7, max: 15 }).withMessage("Phone must be between 7 and 15 characters"),
-  body("gender").if(body("role").equals("teacher")).optional().isIn(["male", "female", "other"]),
+  body("gender")
+    .if(body("role").equals("teacher"))
+    .optional({ values: "falsy" })
+    .customSanitizer((v) => String(v || "").toLowerCase())
+    .isIn(["male", "female", "other"]),
   body("qualification").if(body("role").equals("teacher")).notEmpty().trim(),
-  body("specialization").if(body("role").equals("teacher")).notEmpty().trim(),
-  body("experienceYears").if(body("role").equals("teacher")).optional().isInt({ min: 0 }).toInt(),
+  // specialization UI field removed — backend defaults from qualification in teacherPayload
+  body("experienceYears")
+    .if(body("role").equals("teacher"))
+    .optional({ values: "falsy" })
+    .isInt({ min: 0 })
+    .toInt(),
   body("assignedCourses")
     .if(body("role").equals("teacher"))
     .optional()
@@ -32,10 +40,35 @@ exports.validateRegisterInput = [
       if (Array.isArray(value)) return true
       return true
     }),
-  body("level").if(body("role").equals("teacher")).optional().isIn(["O Level", "A Level"]),
-  body("oLevelHourPay").if(body("role").equals("teacher")).optional().isFloat({ min: 0 }).toFloat(),
-  body("availability").if(body("role").equals("teacher")).optional().trim(),
-  body("joiningDate").if(body("role").equals("teacher")).optional().isISO8601().toDate(),
+  body("level").if(body("role").equals("teacher")).optional({ values: "falsy" }).isIn(["O Level", "A Level"]),
+  body("oLevelHourPay")
+    .if(body("role").equals("teacher"))
+    .optional({ values: "falsy" })
+    .isFloat({ min: 0 })
+    .toFloat(),
+  body("availability").if(body("role").equals("teacher")).optional({ values: "falsy" }).trim(),
+  body("joiningDate")
+    .if(body("role").equals("teacher"))
+    .optional({ values: "falsy" })
+    .isISO8601()
+    .toDate(),
+  // Student fields — keep soft so FormData registration does not fail validation
+  body("gender")
+    .if(body("role").equals("student"))
+    .optional({ values: "falsy" })
+    .customSanitizer((v) => String(v || "").toLowerCase())
+    .isIn(["male", "female", "other"]),
+  body("address").if(body("role").equals("student")).optional({ values: "falsy" }).trim(),
+  body("dateOfBirth")
+    .if(body("role").equals("student"))
+    .optional({ values: "falsy" })
+    .isISO8601()
+    .toDate(),
+  body("admissionDate")
+    .if(body("role").equals("student"))
+    .optional({ values: "falsy" })
+    .isISO8601()
+    .toDate(),
 ]
 
 exports.validateTeacherUpdateInput = [
@@ -43,10 +76,13 @@ exports.validateTeacherUpdateInput = [
   body("email").optional().isEmail().normalizeEmail(),
   body("password").optional().isLength({ min: 6 }),
   body("phone").optional().trim().isLength({ min: 7, max: 15 }),
-  body("gender").optional().isIn(["male", "female", "other"]),
+  body("gender")
+    .optional({ values: "falsy" })
+    .customSanitizer((v) => String(v || "").toLowerCase())
+    .isIn(["male", "female", "other"]),
   body("qualification").optional().trim().notEmpty(),
-  body("specialization").optional().trim().notEmpty(),
-  body("experienceYears").optional().isInt({ min: 0 }).toInt(),
+  // specialization UI field removed — ignored if clients still send it
+  body("experienceYears").optional({ values: "falsy" }).isInt({ min: 0 }).toInt(),
   body("assignedCourses")
     .optional()
     .custom((value) => {
@@ -61,10 +97,10 @@ exports.validateTeacherUpdateInput = [
       if (Array.isArray(value)) return true
       return true
     }),
-  body("level").optional().isIn(["O Level", "A Level"]),
-  body("oLevelHourPay").optional().isFloat({ min: 0 }).toFloat(),
-  body("availability").optional().trim(),
-  body("joiningDate").optional().isISO8601().toDate(),
+  body("level").optional({ values: "falsy" }).isIn(["O Level", "A Level"]),
+  body("oLevelHourPay").optional({ values: "falsy" }).isFloat({ min: 0 }).toFloat(),
+  body("availability").optional({ values: "falsy" }).trim(),
+  body("joiningDate").optional({ values: "falsy" }).isISO8601().toDate(),
 ]
 
 exports.validateCourseInput = [
@@ -90,7 +126,11 @@ exports.validateAssignmentInput = [
 exports.handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req)
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() })
+    const list = errors.array()
+    return res.status(400).json({
+      message: list[0]?.msg || "Validation failed",
+      errors: list,
+    })
   }
   next()
 }

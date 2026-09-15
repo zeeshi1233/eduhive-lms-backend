@@ -922,28 +922,75 @@ exports.getAllSessions = async (req, res) => {
 exports.updateSession = async (req, res) => {
   try {
     const { id } = req.params
-    const { status } = req.body
-
-    if (!status) {
-      return res.status(400).json({ message: "status is required" })
-    }
-
-    const resolvedStatus = normalizeStatus(status)
-    if (!isAllowedStatus(resolvedStatus)) {
-      return res.status(400).json({
-        message: "status must be Scheduled, conducted, not_conducted or Cancelled",
-      })
-    }
+    const { status, type, notConductedReason } = req.body
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid session id" })
     }
 
-    const updated = await Session.findByIdAndUpdate(
-      id,
-      { status: resolvedStatus },
-      { new: true, runValidators: true }
-    )
+    const updates = {}
+
+    if (status !== undefined && status !== null && status !== "") {
+      const resolvedStatus = normalizeStatus(status)
+      if (!isAllowedStatus(resolvedStatus)) {
+        return res.status(400).json({
+          message: "status must be Scheduled, conducted, not_conducted or Cancelled",
+        })
+      }
+      updates.status = resolvedStatus
+    }
+
+    if (type !== undefined && type !== null && type !== "") {
+      const allowedTypes = ["Regular Class", "Extra Class"]
+      const resolvedType = String(type).toLowerCase().includes("extra")
+        ? "Extra Class"
+        : "Regular Class"
+      if (!allowedTypes.includes(resolvedType)) {
+        return res.status(400).json({ message: "type must be Regular Class or Extra Class" })
+      }
+      updates.type = resolvedType
+    }
+
+    if (notConductedReason !== undefined) {
+      const allowedReasons = ["Teacher Not Present", "Student Not Present", "Others"]
+      const reason = String(notConductedReason || "").trim()
+      if (reason && !allowedReasons.includes(reason)) {
+        return res.status(400).json({
+          message:
+            "notConductedReason must be Teacher Not Present, Student Not Present, or Others",
+        })
+      }
+      if (reason) updates.notConductedReason = reason
+      else updates.$unset = { ...(updates.$unset || {}), notConductedReason: 1 }
+    }
+
+    if (updates.status && updates.status !== "not_conducted") {
+      updates.$unset = { ...(updates.$unset || {}), notConductedReason: 1 }
+      delete updates.notConductedReason
+    }
+
+    if (updates.status === "not_conducted" && !updates.notConductedReason) {
+      updates.notConductedReason = "Others"
+      if (updates.$unset) delete updates.$unset.notConductedReason
+    }
+
+    if (!Object.keys(updates).filter((k) => k !== "$unset").length && !updates.$unset) {
+      return res.status(400).json({
+        message: "Provide status, type, and/or notConductedReason to update",
+      })
+    }
+
+    const unset = updates.$unset
+    delete updates.$unset
+
+    const updateQuery = {}
+    if (Object.keys(updates).length) updateQuery.$set = updates
+    if (unset) updateQuery.$unset = unset
+
+    const updated = await Session.findByIdAndUpdate(id, updateQuery, {
+      new: true,
+      runValidators: true,
+    })
 
     if (!updated) {
       return res.status(404).json({ message: "Session not found" })
@@ -952,7 +999,7 @@ exports.updateSession = async (req, res) => {
     const session = await fetchFormattedSessionById(updated._id)
 
     res.status(200).json({
-      message: "Status updated",
+      message: "Session updated",
       session,
     })
   } catch (error) {
