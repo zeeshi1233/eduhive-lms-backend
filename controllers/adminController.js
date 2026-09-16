@@ -243,16 +243,89 @@ exports.updateStudent = async (req, res) => {
   try {
     const { id } = req.params
 
-    const { email, password, role, ...studentData } = req.body
+    const {
+      email,
+      password,
+      role,
+      enrolledCourses,
+      "enrolledCourses[]": enrolledCoursesArr,
+      ...rawStudent
+    } = req.body
+
+    const studentData = { ...rawStudent }
+
+    if (req.file) {
+      studentData.profileImage = req.file.path
+    }
+
+    if (studentData.gender) {
+      studentData.gender = String(studentData.gender).trim().toLowerCase()
+    }
+    if (studentData.dateOfBirth) {
+      studentData.dateOfBirth = new Date(studentData.dateOfBirth)
+    }
+    if (studentData.admissionDate) {
+      studentData.admissionDate = new Date(studentData.admissionDate)
+    }
+
+    // Strip empty password from body updates
+    delete studentData.password
 
     const student = await Student.findByIdAndUpdate(id, studentData, {
       new: true,
+      runValidators: true,
     })
     if (!student) return res.status(404).json({ message: "Student not found" })
 
-    // Email update karo agar diya gaya ho
     if (email) {
       await Auth.findOneAndUpdate({ refId: id, role: "student" }, { email })
+    }
+
+    if (password && String(password).trim().length >= 6) {
+      const auth = await Auth.findOne({ refId: id, role: "student" }).select("+password")
+      if (auth) {
+        auth.password = password
+        await auth.save()
+      }
+    }
+
+    const courseIdsRaw = enrolledCoursesArr || enrolledCourses
+    if (courseIdsRaw !== undefined) {
+      const normalize = (value) => {
+        if (Array.isArray(value)) return value.map(String).filter(Boolean)
+        if (!value && value !== 0) return []
+        if (typeof value === "string") {
+          return value
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        }
+        return [String(value)]
+      }
+      const nextCourseIds = normalize(courseIdsRaw)
+
+      const existing = await StudentCourse.find({ studentId: id })
+      const existingIds = existing.map((e) => String(e.courseId))
+      const nextSet = new Set(nextCourseIds.map(String))
+
+      const toAdd = nextCourseIds.filter((cid) => !existingIds.includes(String(cid)))
+      const toDrop = existing.filter((e) => !nextSet.has(String(e.courseId)))
+
+      await Promise.all(
+        toAdd.map((courseId) =>
+          StudentCourse.findOneAndUpdate(
+            { studentId: id, courseId },
+            { studentId: id, courseId, status: "active", enrolledAt: new Date() },
+            { upsert: true, new: true }
+          )
+        )
+      )
+
+      await Promise.all(
+        toDrop.map((e) =>
+          StudentCourse.findByIdAndUpdate(e._id, { status: "dropped" })
+        )
+      )
     }
 
     res.status(200).json({ message: "Student updated successfully", student })
@@ -375,20 +448,72 @@ exports.getCourses = async (req, res) => {
 exports.getCourseById = async (req, res) => {
   try {
     const { id } = req.params
-    let course = mongoose.Types.ObjectId.isValid(id) ? await Course.findById(id).populate("instructor", "name email") : null
+    let course = mongoose.Types.ObjectId.isValid(id)
+      ? await Course.findById(id).populate("instructor", "name email phone profileImage")
+      : null
 
     if (!course) {
       course = await Course.findOne({
         $or: [{ code: id }, { serialNumber: id }],
-      }).populate("instructor", "name email")
+      }).populate("instructor", "name email phone profileImage")
     }
 
     if (!course) return res.status(404).json({ message: "Course not found" })
 
-    const enrollments = await StudentCourse.find({ courseId: course._id }).populate("studentId", "name")
+    const enrollments = await StudentCourse.find({ courseId: course._id }).populate(
+      "studentId",
+      "name"
+    )
     const students = enrollments.map((e) => e.studentId)
     const obj = course.toObject()
     const resolvedCode = obj.code || obj.serialNumber || ""
+
+    // All teachers who have this course in assignedCourses (+ primary instructor)
+    const assignedTeachers = await Teacher.find({
+      assignedCourses: course._id,
+    }).select("name phone profileImage qualification experienceYears isActive assignedCourses")
+
+    const teacherIds = assignedTeachers.map((t) => t._id)
+    if (course.instructor?._id && !teacherIds.some((id) => String(id) === String(course.instructor._id))) {
+      // instructor already populated separately
+    }
+
+    const authRecords = await Auth.find({
+      refId: { $in: teacherIds.concat(course.instructor?._id ? [course.instructor._id] : []) },
+      role: "teacher",
+    }).select("email refId")
+
+    const emailMap = {}
+    authRecords.forEach((a) => {
+      emailMap[String(a.refId)] = a.email
+    })
+
+    const teachersMap = new Map()
+    assignedTeachers.forEach((t) => {
+      teachersMap.set(String(t._id), {
+        _id: t._id,
+        name: t.name,
+        phone: t.phone,
+        profileImage: t.profileImage,
+        qualification: t.qualification,
+        experienceYears: t.experienceYears,
+        isActive: t.isActive,
+        email: emailMap[String(t._id)] || null,
+      })
+    })
+
+    if (course.instructor?._id) {
+      const iid = String(course.instructor._id)
+      if (!teachersMap.has(iid)) {
+        teachersMap.set(iid, {
+          _id: course.instructor._id,
+          name: course.instructor.name,
+          phone: course.instructor.phone,
+          profileImage: course.instructor.profileImage,
+          email: emailMap[iid] || course.instructor.email || null,
+        })
+      }
+    }
 
     res.status(200).json({
       course: {
@@ -397,6 +522,8 @@ exports.getCourseById = async (req, res) => {
         courseCode: resolvedCode,
         students,
         studentCount: students.length,
+        teachers: Array.from(teachersMap.values()),
+        assignedTeachers: Array.from(teachersMap.values()),
       },
     })
   } catch (error) {

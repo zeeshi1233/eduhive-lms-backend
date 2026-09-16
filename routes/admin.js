@@ -69,7 +69,7 @@ router.delete("/teachers/:id", deleteTeacher)
 // Students
 // --------------------
 router.get("/students", getStudents)
-router.put("/students/:id", updateStudent)
+router.put("/students/:id", upload.single("profileImage"), updateStudent)
 router.delete("/students/:id", deleteStudent)
 
 // --------------------
