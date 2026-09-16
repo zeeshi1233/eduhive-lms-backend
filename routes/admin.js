@@ -7,6 +7,7 @@ const {
   getStudents,
   updateStudent,
   deleteStudent,
+  sendStudentProfileEmail,
   createCourse,
   getCourses,
   updateCourse,
@@ -70,6 +71,7 @@ router.delete("/teachers/:id", deleteTeacher)
 // --------------------
 router.get("/students", getStudents)
 router.put("/students/:id", upload.single("profileImage"), updateStudent)
+router.post("/students/:id/send-email", sendStudentProfileEmail)
 router.delete("/students/:id", deleteStudent)
 
 // --------------------

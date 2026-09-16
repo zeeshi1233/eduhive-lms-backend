@@ -349,6 +349,69 @@ exports.deleteStudent = async (req, res) => {
 }
 
 // =========================
+// Send Student Profile Email
+// =========================
+exports.sendStudentProfileEmail = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { to, subject } = req.body || {}
+
+    if (!to || !String(to).trim()) {
+      return res.status(400).json({ message: "Recipient email is required" })
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(String(to).trim())) {
+      return res.status(400).json({ message: "Please enter a valid email address" })
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid student id" })
+    }
+
+    const student = await Student.findById(id)
+    if (!student) return res.status(404).json({ message: "Student not found" })
+
+    const auth = await Auth.findOne({ refId: id, role: "student" }).select("email")
+    const enrollments = await StudentCourse.find({
+      studentId: id,
+      status: { $ne: "dropped" },
+    }).populate("courseId", "title board code")
+
+    const profile = {
+      ...student.toObject(),
+      email: auth?.email || student.email || "",
+      enrolledCourses: enrollments.map((e) => ({
+        course: e.courseId,
+        status: e.status,
+      })),
+    }
+
+    const { buildStudentProfileEmail } = require("../utils/studentEmailTemplate")
+    const { sendMail } = require("../utils/mailer")
+    const template = buildStudentProfileEmail(profile)
+
+    await sendMail({
+      to: String(to).trim(),
+      subject: subject || template.subject,
+      html: template.html,
+      text: template.text,
+    })
+
+    res.status(200).json({
+      message: "Student profile email sent successfully",
+      to: String(to).trim(),
+    })
+  } catch (error) {
+    const status = error.statusCode || 500
+    res.status(status).json({
+      message: error.message || "Failed to send email",
+      code: error.code,
+    })
+  }
+}
+
+// =========================
 // Courses
 // =========================
 exports.createCourse = async (req, res) => {
