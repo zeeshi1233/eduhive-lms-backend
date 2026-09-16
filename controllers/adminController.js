@@ -388,14 +388,29 @@ exports.sendStudentProfileEmail = async (req, res) => {
     }
 
     const { buildStudentProfileEmail } = require("../utils/studentEmailTemplate")
-    const { sendMail } = require("../utils/mailer")
-    const template = buildStudentProfileEmail(profile)
+    const { sendMail, buildAvatarAttachment } = require("../utils/mailer")
+
+    const avatarAttachment = await buildAvatarAttachment(
+      profile.profileImage,
+      profile.name
+    )
+
+    const template = buildStudentProfileEmail(profile, {
+      avatarCid: avatarAttachment ? avatarAttachment.cid : undefined,
+      avatarUrl: avatarAttachment
+        ? undefined
+        : profile.profileImage ||
+          `https://api.dicebear.com/7.x/avataaars/png?seed=${encodeURIComponent(
+            profile.name || "student"
+          )}&size=256`,
+    })
 
     await sendMail({
       to: String(to).trim(),
       subject: subject || template.subject,
       html: template.html,
       text: template.text,
+      attachments: avatarAttachment ? [avatarAttachment] : [],
     })
 
     res.status(200).json({

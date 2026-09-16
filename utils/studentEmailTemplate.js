@@ -43,8 +43,10 @@ function courseLabels(student) {
 
 /**
  * HTML email matching Student Profile Details modal layout / EduHive branding.
+ * @param {object} student
+ * @param {{ avatarCid?: string, avatarUrl?: string }} [options]
  */
-function buildStudentProfileEmail(student = {}) {
+function buildStudentProfileEmail(student = {}, options = {}) {
   const name = escapeHtml(student.name || "Student")
   const email = escapeHtml(student.email || "N/A")
   const phone = escapeHtml(student.phone || "N/A")
@@ -55,11 +57,21 @@ function buildStudentProfileEmail(student = {}) {
   const guardianPhone = escapeHtml(student.guardianPhone || "N/A")
   const admission = escapeHtml(formatDate(student.admissionDate))
   const courses = courseLabels(student)
-  const avatar =
-    student.profileImage ||
-    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+
+  // Prefer inline CID (embedded) so clients show the photo without "Show pictures"
+  let avatarSrc = ""
+  if (options.avatarCid) {
+    avatarSrc = `cid:${options.avatarCid}`
+  } else if (options.avatarUrl) {
+    avatarSrc = options.avatarUrl
+  } else if (student.profileImage) {
+    avatarSrc = String(student.profileImage).replace("/svg?", "/png?").replace(/\/svg$/i, "/png")
+    if (avatarSrc.startsWith("//")) avatarSrc = `https:${avatarSrc}`
+  } else {
+    avatarSrc = `https://api.dicebear.com/7.x/avataaars/png?seed=${encodeURIComponent(
       student.name || "student"
-    )}`
+    )}&size=256`
+  }
 
   const courseChips = courses.length
     ? courses
@@ -102,7 +114,13 @@ function buildStudentProfileEmail(student = {}) {
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                 <tr>
                   <td width="100" valign="top">
-                    <img src="${escapeHtml(avatar)}" alt="${name}" width="90" height="90" style="width:90px;height:90px;border-radius:50%;object-fit:cover;border:2px solid #FEBA01;display:block;" />
+                    <table role="presentation" cellspacing="0" cellpadding="0" style="border:2px solid #FEBA01;border-radius:50%;overflow:hidden;">
+                      <tr>
+                        <td style="width:90px;height:90px;line-height:0;font-size:0;">
+                          <img src="${escapeHtml(avatarSrc)}" alt="Profile photo" width="90" height="90" style="width:90px;height:90px;border-radius:50%;object-fit:cover;display:block;border:0;" />
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                   <td valign="middle" style="padding-left:16px;">
                     <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;">${name}</div>
