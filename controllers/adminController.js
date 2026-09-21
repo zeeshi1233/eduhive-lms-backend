@@ -1022,6 +1022,7 @@ exports.createSession = async (req, res) => {
       duration,
       description,
       status,
+      clientOffset,
     } = req.body
 
     if (!title || !courseId || !teacherId || !startTime) {
@@ -1034,9 +1035,19 @@ exports.createSession = async (req, res) => {
       return res.status(400).json({ message: "Valid courseId and teacherId are required" })
     }
 
-    const parsedStart = new Date(startTime)
+    let parsedStart = new Date(startTime)
     if (Number.isNaN(parsedStart.getTime())) {
       return res.status(400).json({ message: "Invalid startTime" })
+    }
+
+    // If clientOffset is provided and startTime was naive (no Z or offset)
+    if (
+      typeof startTime === "string" &&
+      !startTime.endsWith("Z") &&
+      !/[+-]\d{2}(?::?\d{2})?$/.test(startTime) &&
+      typeof clientOffset === "number"
+    ) {
+      parsedStart = new Date(parsedStart.getTime() + clientOffset * 60 * 1000)
     }
 
     if (duration && !ALLOWED_DURATIONS.includes(duration)) {
@@ -1248,7 +1259,7 @@ exports.deleteSession = async (req, res) => {
 exports.updateSession = async (req, res) => {
   try {
     const { id } = req.params
-    const { status, type, notConductedReason } = req.body
+    const { status, type, notConductedReason, startTime, duration, clientOffset } = req.body
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid session id" })
@@ -1288,6 +1299,31 @@ exports.updateSession = async (req, res) => {
       }
       if (reason) updates.notConductedReason = reason
       else updates.$unset = { ...(updates.$unset || {}), notConductedReason: 1 }
+    }
+
+    if (startTime) {
+      let parsedStart = new Date(startTime)
+      if (!Number.isNaN(parsedStart.getTime())) {
+        if (
+          typeof startTime === "string" &&
+          !startTime.endsWith("Z") &&
+          !/[+-]\d{2}(?::?\d{2})?$/.test(startTime) &&
+          typeof clientOffset === "number"
+        ) {
+          parsedStart = new Date(parsedStart.getTime() + clientOffset * 60 * 1000)
+        }
+        updates.startTime = parsedStart
+        const resDuration = duration || (await Session.findById(id))?.duration || "60 mins"
+        updates.endTime = computeEndTime(parsedStart, resDuration)
+      }
+    }
+
+    if (duration && ALLOWED_DURATIONS.includes(duration)) {
+      updates.duration = duration
+      const currentStart = updates.startTime || (await Session.findById(id))?.startTime
+      if (currentStart) {
+        updates.endTime = computeEndTime(currentStart, duration)
+      }
     }
 
     if (updates.status && updates.status !== "not_conducted") {
