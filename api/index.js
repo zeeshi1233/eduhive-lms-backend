@@ -9,7 +9,7 @@ const authRoutes = require("../routes/auth")
 const adminRoutes = require("../routes/admin")
 const teacherRoutes = require("../routes/teacher")
 const studentRoutes = require("../routes/student")
-const livekitRoutes = require("../routes/livekit")
+const meetingRoutes = require("../routes/meeting")
 const { verifyToken } = require("../middleware/auth")
 const { listSessionsForCurrentUser } = require("../controllers/adminController")
 
@@ -80,12 +80,12 @@ app.use("/api/auth", authRoutes)
 app.use("/api/admin", adminRoutes)
 app.use("/api/teacher", teacherRoutes)
 app.use("/api/student", studentRoutes)
-app.use("/api", livekitRoutes)
+app.use("/api", meetingRoutes)
 app.get("/api/sessions", verifyToken, listSessionsForCurrentUser)
 
 // Health check
 app.get("/api/health", (req, res) => {
-  res.status(200).json({ message: "Server running 🚀" })
+  res.status(200).json({ message: "Server running dYs?" })
 })
 
 // Error handler
@@ -101,7 +101,7 @@ const PORT = process.env.PORT || 5000
 
 if (process.env.NODE_ENV !== "production") {
   app.listen(PORT, () => {
-    console.log(`🚀 Local server running on http://localhost:${PORT}`)
+    console.log(`dYs? Local server running on http://localhost:${PORT}`)
   })
 }
 

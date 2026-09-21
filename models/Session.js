@@ -60,6 +60,16 @@ const sessionSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    
+    googleMeetSpace: {
+      type: String,
+      default: "",
+    },
+
+    googleMeetLink: {
+      type: String,
+      default: "",
+    },
 
     status: {
       type: String,
@@ -84,6 +94,14 @@ const sessionSchema = new mongoose.Schema(
     teacherAttendance: {
       checkInTime: Date,
       checkOutTime: Date,
+      durationMinutes: {
+        type: Number,
+        default: 0
+      },
+      durationFormatted: {
+        type: String,
+        default: ""
+      }
     },
 
     studentAttendance: [
@@ -96,6 +114,14 @@ const sessionSchema = new mongoose.Schema(
         present: Boolean,
         joinedAt: Date,
         leftAt: Date,
+        durationMinutes: {
+          type: Number,
+          default: 0
+        },
+        durationFormatted: {
+          type: String,
+          default: ""
+        },
         markedAt: {
           type: Date,
           default: Date.now,

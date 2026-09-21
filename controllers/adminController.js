@@ -1,3 +1,4 @@
+const { createGoogleMeetSpace } = require("../utils/googleMeet");
 const Teacher = require("../models/Teacher")
 const Student = require("../models/Student")
 const Course = require("../models/Course")
@@ -1083,6 +1084,14 @@ exports.createSession = async (req, res) => {
     await newSession.save()
     newSession.roomName = `eduhive-class-${newSession._id}`
     newSession.meetingLink = `/classroom/${newSession._id}`
+    
+    try {
+      const meet = await createGoogleMeetSpace();
+      newSession.googleMeetSpace = meet.spaceName;
+      newSession.googleMeetLink = meet.meetingUri;
+    } catch(e) {
+      console.log("Failed to create google meet automatically:", e.message);
+    }
     await newSession.save()
     const session = await fetchFormattedSessionById(newSession._id)
 

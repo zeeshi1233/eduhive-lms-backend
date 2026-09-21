@@ -12,6 +12,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-validator": "^7.3.1",
+    "google-auth-library": "^11.1.0",
+    "googleapis": "^181.0.0",
     "jsonwebtoken": "^9.0.3",
     "livekit-server-sdk": "^2.19.0",
     "mongoose": "^9.0.2",
