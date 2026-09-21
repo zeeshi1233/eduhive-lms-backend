@@ -1,3 +1,53 @@
+
+const Teacher = require("../models/Teacher");
+
+// Teacher-level: generate Google OAuth URL
+exports.teacherGoogleAuthUrl = (req, res) => {
+  const { getTeacherGoogleAuthUrl } = require("../utils/googleMeet");
+  const teacherId = req.user?.profileId || req.query.teacherId;
+  const authUrl = getTeacherGoogleAuthUrl(teacherId);
+  res.status(200).json({ authUrl });
+};
+
+// Teacher-level: handle OAuth callback — saves teacher's refresh token to DB
+exports.teacherGoogleConnect = async (req, res) => {
+  try {
+    const { code, state: teacherId } = req.query;
+    if (!code || !teacherId) {
+      return res.status(400).json({ message: "Missing code or teacher state" });
+    }
+
+    const { getGoogleOAuthClient } = require("../utils/googleMeet");
+    const oauth2Client = getGoogleOAuthClient();
+    const { tokens } = await oauth2Client.getToken(code);
+
+    if (!tokens.refresh_token) {
+      return res.status(400).json({
+        message: "No refresh_token received. Please ensure you are granting offline access.",
+      });
+    }
+
+    // Get teacher's email from Google
+    oauth2Client.setCredentials(tokens);
+    const oauth2 = require("googleapis").google.oauth2({ version: "v2", auth: oauth2Client });
+    const me = await oauth2.userinfo.get();
+    const googleEmail = me.data.email || "";
+
+    await Teacher.findByIdAndUpdate(teacherId, {
+      googleRefreshToken: tokens.refresh_token,
+      googleEmail,
+      googleConnected: true,
+    });
+
+    res.status(200).json({
+      message: `Google account connected! Teacher is now the host for all their sessions. (Google Email: ${googleEmail})`,
+      googleEmail,
+    });
+  } catch (error) {
+    console.error("Teacher Google connect error:", error);
+    res.status(500).json({ message: "Failed to connect Google account", error: error.message });
+  }
+};
 const mongoose = require("mongoose");
 const StudentCourse = require("../models/StudentCourse");
 const { fetchFormattedSessionById } = require("../utils/sessionHelpers");

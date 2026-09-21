@@ -115,9 +115,67 @@ async function syncGoogleMeetAttendance(spaceName) {
   }
 }
 
+
+// Create a Google Meet Space using the teacher's own OAuth token (teacher = host)
+// Falls back to admin token if teacher hasn't connected their Google account
+async function createGoogleMeetSpaceForTeacher(teacher) {
+  const refreshToken = teacher?.googleRefreshToken || process.env.GOOGLE_REFRESH_TOKEN;
+  
+  if (!refreshToken) {
+    throw new Error("No Google refresh token available. Please connect your Google account or contact admin.");
+  }
+
+  try {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+
+    const meet = google.meet({ version: 'v2', auth: oauth2Client });
+    const response = await meet.spaces.create({ requestBody: {} });
+
+    return {
+      spaceName: response.data.name,
+      meetingUri: response.data.meetingUri,
+      hostedByTeacher: !!teacher?.googleRefreshToken,
+    };
+  } catch (error) {
+    console.error("Failed to create Google Meet Space for teacher:", error.message);
+    // Fallback to admin token
+    if (teacher?.googleRefreshToken && process.env.GOOGLE_REFRESH_TOKEN) {
+      console.log("Falling back to admin token for Meet creation...");
+      return createGoogleMeetSpace();
+    }
+    throw new Error("Could not generate Google Meet link. Please ensure Google account is connected.");
+  }
+}
+
+// Generate OAuth URL for teacher Google connect
+function getTeacherGoogleAuthUrl(teacherId) {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+  return oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: [
+      'https://www.googleapis.com/auth/meetings.space.created',
+      'https://www.googleapis.com/auth/meetings.space.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ],
+    prompt: 'consent',
+    state: teacherId,
+  });
+}
+
 module.exports = {
   getGoogleOAuthClient,
   createGoogleMeetSpace,
+  createGoogleMeetSpaceForTeacher,
+  getTeacherGoogleAuthUrl,
   syncGoogleMeetAttendance,
   formatDuration
 };

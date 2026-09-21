@@ -10,6 +10,7 @@ const adminRoutes = require("../routes/admin")
 const teacherRoutes = require("../routes/teacher")
 const studentRoutes = require("../routes/student")
 const meetingRoutes = require("../routes/meeting")
+const webhookRoutes = require("../routes/webhook")
 const { verifyToken } = require("../middleware/auth")
 const { listSessionsForCurrentUser } = require("../controllers/adminController")
 
@@ -81,6 +82,7 @@ app.use("/api/admin", adminRoutes)
 app.use("/api/teacher", teacherRoutes)
 app.use("/api/student", studentRoutes)
 app.use("/api", meetingRoutes)
+app.use("/api/webhooks", webhookRoutes)
 app.get("/api/sessions", verifyToken, listSessionsForCurrentUser)
 
 // Health check

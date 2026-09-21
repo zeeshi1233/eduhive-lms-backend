@@ -39,6 +39,11 @@ const TeacherSchema = new mongoose.Schema(
     joiningDate: { type: Date, required: true },
 
     isActive: { type: Boolean, default: true },
+    
+    // Google Workspace OAuth — stored so teacher becomes the Host
+    googleRefreshToken: { type: String, default: "" },
+    googleEmail: { type: String, default: "" },
+    googleConnected: { type: Boolean, default: false },
   },
   { timestamps: true }
 )

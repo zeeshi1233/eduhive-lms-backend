@@ -1,4 +1,5 @@
-const { createGoogleMeetSpace } = require("../utils/googleMeet");
+const { createGoogleMeetSpaceForTeacher } = require("../utils/googleMeet");
+const { createMeetSpaceAsTeacher } = require("../utils/googleMeetServiceAccount");
 const Teacher = require("../models/Teacher")
 const Student = require("../models/Student")
 const Course = require("../models/Course")
@@ -1086,7 +1087,21 @@ exports.createSession = async (req, res) => {
     newSession.meetingLink = `/classroom/${newSession._id}`
     
     try {
-      const meet = await createGoogleMeetSpace();
+      // Try Service Account (teacher as host) first, fallback to OAuth token
+      let meet;
+      try {
+        const teacherEmail = teacher?.googleEmail || "";
+        if (teacherEmail && (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)) {
+          meet = await createMeetSpaceAsTeacher(teacherEmail);
+          console.log(`[Session] Meet created via Service Account. Host: ${teacherEmail}`);
+        } else {
+          meet = await createGoogleMeetSpaceForTeacher(teacher);
+          console.log(`[Session] Meet created via OAuth token.`);
+        }
+      } catch (saErr) {
+        console.warn("[Session] Service Account failed, falling back to OAuth:", saErr.message);
+        meet = await createGoogleMeetSpaceForTeacher(teacher);
+      }
       newSession.googleMeetSpace = meet.spaceName;
       newSession.googleMeetLink = meet.meetingUri;
     } catch(e) {
@@ -1130,6 +1145,73 @@ exports.getAllSessions = async (req, res) => {
       message: "Failed to fetch sessions",
       error: error.message,
     })
+  }
+}
+
+
+exports.getSessionById = async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid session id' })
+    }
+
+    const session = await Session.findById(id)
+      .populate('course', 'title board code serialNumber description')
+      .populate('instructor', 'name email profileImage')
+      .populate('studentAttendance.student', 'name phone profileImage')
+
+    if (!session) {
+      return res.status(404).json({ message: 'Session not found' })
+    }
+
+    const obj = session.toObject()
+
+    // Teacher attendance duration
+    let teacherDuration = null
+    if (obj.teacherAttendance?.checkInTime && obj.teacherAttendance?.checkOutTime) {
+      const ms = new Date(obj.teacherAttendance.checkOutTime) - new Date(obj.teacherAttendance.checkInTime)
+      const mins = Math.round(ms / 60000)
+      const h = Math.floor(mins / 60)
+      const m = mins % 60
+      teacherDuration = h > 0 ? `${h} hr${h > 1 ? 's' : ''} ${m} mins` : `${m} mins`
+    }
+
+    // Students attendance enriched
+    const students = (obj.studentAttendance || []).map(record => {
+      let duration = null
+      if (record.joinedAt && record.leftAt) {
+        const ms = new Date(record.leftAt) - new Date(record.joinedAt)
+        const mins = Math.round(ms / 60000)
+        const h = Math.floor(mins / 60)
+        const m = mins % 60
+        duration = h > 0 ? `${h} hr${h > 1 ? 's' : ''} ${m} mins` : `${m} mins`
+      }
+      return {
+        _id: record._id,
+        student: record.student,
+        present: record.present,
+        joinedAt: record.joinedAt || null,
+        leftAt: record.leftAt || null,
+        duration,
+        markedAt: record.markedAt || null,
+      }
+    })
+
+    const presentCount = students.filter(s => s.present).length
+
+    res.status(200).json({
+      success: true,
+      session: {
+        ...obj,
+        teacherDuration,
+        studentAttendance: students,
+        presentCount,
+        totalStudents: students.length,
+      }
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch session', error: error.message })
   }
 }
 
