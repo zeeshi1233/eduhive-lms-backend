@@ -1,14 +1,16 @@
+require('dotenv').config();
 const { OAuth2Client } = require('google-auth-library');
 const readline = require('readline');
 
-// Using your credentials from .env
-const CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID';
-const CLIENT_SECRET = 'YOUR_GOOGLE_CLIENT_SECRET';
-const REDIRECT_URI = 'http://localhost:5000/api/google/callback'; 
+// Using your credentials directly from .env file
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/google/callback'; 
 
 // Add the scopes you need for Google Meet / Calendar
 const SCOPES = [
-  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/meetings.space.created',
+  'https://www.googleapis.com/auth/meetings.space.readonly',
   'https://www.googleapis.com/auth/calendar.events'
 ];
 

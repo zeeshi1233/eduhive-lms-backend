@@ -33,14 +33,10 @@ async function createGoogleMeetSpace() {
     const oauth2Client = getGoogleOAuthClient();
     const meet = google.meet({ version: 'v2', auth: oauth2Client });
     
-    // accessType: RESTRICTED ensures only domain users or explicitly invited users can join
-    // This provides the platform restriction the user requested.
+    // accessType: RESTRICTED is only available for Google Workspace (paid) accounts.
+    // For standard @gmail.com accounts, we must omit the config to use the default settings.
     const response = await meet.spaces.create({
-      requestBody: {
-        config: {
-          accessType: 'RESTRICTED'
-        }
-      }
+      requestBody: {}
     });
 
     return {
