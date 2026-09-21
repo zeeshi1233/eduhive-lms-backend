@@ -1,4 +1,5 @@
 .vercel
 /node_modules
 .env
-.vercel
+config/google-service-account.json
+*service-account*.json
