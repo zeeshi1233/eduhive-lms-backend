@@ -1200,18 +1200,48 @@ exports.getSessionById = async (req, res) => {
 
     const presentCount = students.filter(s => s.present).length
 
+    const enrichedSession = {
+      ...obj,
+      teacherDuration,
+      studentAttendance: students,
+      presentCount,
+      totalStudents: students.length,
+      classroomPath: `/classroom/${obj._id}`,
+      joinUrl: `/classroom/${obj._id}`,
+      meetingLink: obj.googleMeetLink || obj.meetingLink || `/classroom/${obj._id}`,
+    }
+
     res.status(200).json({
       success: true,
-      session: {
-        ...obj,
-        teacherDuration,
-        studentAttendance: students,
-        presentCount,
-        totalStudents: students.length,
-      }
+      session: enrichedSession,
+      ...enrichedSession,
     })
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch session', error: error.message })
+  }
+}
+
+exports.deleteSession = async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid session id" })
+    }
+
+    const session = await Session.findByIdAndDelete(id)
+    if (!session) {
+      return res.status(404).json({ message: "Session not found" })
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Session deleted successfully",
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to delete session",
+      error: error.message,
+    })
   }
 }
 

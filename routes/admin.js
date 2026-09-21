@@ -24,6 +24,8 @@ const {
   payTeacherSalaryBySession,
   createSession,
   getAllSessions,
+  getSessionById,
+  deleteSession,
   enrollStudentInCourse,
   updateEnrollmentStatus,
   getCourseById,
@@ -111,7 +113,9 @@ router.get("/teachers/:teacherId/sessions", getSessionsByTeacherForPayroll)
 router.post("/teachers/pay-salary", payTeacherSalaryBySession)
 router.post("/sessions", createSession)
 router.get("/sessions", getAllSessions)
+router.get("/sessions/:id", getSessionById)
 router.put("/sessions/:id", updateSession)
 router.patch("/sessions/:id", updateSession)
+router.delete("/sessions/:id", deleteSession)
 
 module.exports = router
