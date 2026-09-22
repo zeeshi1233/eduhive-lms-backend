@@ -1475,3 +1475,40 @@ exports.updateEnrollmentStatus = async (req, res) => {
     res.status(500).json({ message: "Failed to update enrollment", error: error.message })
   }
 }
+
+exports.getTeachersByCourse = async (req, res) => {
+  try {
+    const { courseId } = req.params
+    if (!courseId) {
+      return res.status(400).json({ message: "courseId is required" })
+    }
+
+    const teachers = await Teacher.find({
+      assignedCourses: courseId,
+      isActive: { $ne: false },
+    }).populate("assignedCourses", "title description duration price courseImage")
+
+    const teacherIds = teachers.map((t) => t._id)
+    const authRecords = await Auth.find({ refId: { $in: teacherIds }, role: "teacher" }).select(
+      "email refId isActive"
+    )
+
+    const authMap = {}
+    authRecords.forEach((a) => {
+      authMap[String(a.refId)] = a
+    })
+
+    const result = teachers.map((teacher) => {
+      const authData = authMap[String(teacher._id)] || {}
+      return {
+        ...teacher.toObject(),
+        email: authData.email || null,
+        isActive: authData.isActive ?? teacher.isActive,
+      }
+    })
+
+    res.status(200).json({ teachers: result })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch teachers for course", error: error.message })
+  }
+}

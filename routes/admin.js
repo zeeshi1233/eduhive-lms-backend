@@ -30,6 +30,7 @@ const {
   updateEnrollmentStatus,
   getCourseById,
   updateSession,
+  getTeachersByCourse,
 } = require("../controllers/adminController")
 const { verifyToken, authorize } = require("../middleware/auth")
 const {
@@ -117,5 +118,7 @@ router.get("/sessions/:id", getSessionById)
 router.put("/sessions/:id", updateSession)
 router.patch("/sessions/:id", updateSession)
 router.delete("/sessions/:id", deleteSession)
+
+router.get("/courses/:courseId/teachers", getTeachersByCourse)
 
 module.exports = router
