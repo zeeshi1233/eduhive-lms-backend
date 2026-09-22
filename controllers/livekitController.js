@@ -1,6 +1,7 @@
 const { AccessToken } = require("livekit-server-sdk")
 const mongoose = require("mongoose")
 const StudentCourse = require("../models/StudentCourse")
+const Student = require("../models/Student")
 const { fetchFormattedSessionById } = require("../utils/sessionHelpers")
 const {
   classroomPath,

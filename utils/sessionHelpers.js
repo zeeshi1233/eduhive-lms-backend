@@ -1,6 +1,7 @@
 const mongoose = require("mongoose")
 const Session = require("../models/Session")
 const StudentCourse = require("../models/StudentCourse")
+const Student = require("../models/Student")
 const {
   classroomPath,
   classroomRoomName,
@@ -102,7 +103,8 @@ function formatSession(session) {
   if (!session) return session
   const obj = session.toObject ? session.toObject() : { ...session }
   const course = formatCourse(obj.course)
-  const instructor = formatInstructor(obj.instructor)
+  const instructor = formatInstructor(obj.instructor || obj.teacher)
+  const teacher = formatInstructor(obj.teacher || obj.instructor)
   const duration = ALLOWED_DURATIONS.includes(obj.duration) ? obj.duration : obj.duration || "60 mins"
   const endTime = obj.endTime || computeEndTime(obj.startTime, duration)
 
@@ -114,14 +116,16 @@ function formatSession(session) {
   return {
     ...obj,
     courseId: course?._id || obj.course,
-    teacherId: instructor?._id || obj.instructor,
+    teacherId: teacher?._id || instructor?._id || obj.teacher || obj.instructor,
     course,
     courseTitle:
       (course && typeof course === "object" && (course.title || course.code)) ||
       obj.title ||
       "",
     instructor,
-    teacher: instructor,
+    teacher,
+    instructor,
+    link: obj.link || obj.meetingLink || joinPath,
     duration,
     type: obj.type || "Regular Class",
     status: obj.status || "Scheduled",
@@ -147,6 +151,7 @@ async function fetchFormattedSessions(filter = {}) {
   const sessions = await Session.find(filter)
     .populate("course", COURSE_POPULATE)
     .populate("instructor", INSTRUCTOR_POPULATE)
+    .populate("teacher", INSTRUCTOR_POPULATE)
     .sort({ startTime: 1 })
 
   return sessions.map(formatSession)

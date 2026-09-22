@@ -50,6 +50,7 @@ exports.teacherGoogleConnect = async (req, res) => {
 };
 const mongoose = require("mongoose");
 const StudentCourse = require("../models/StudentCourse");
+const Student = require("../models/Student");
 const { fetchFormattedSessionById } = require("../utils/sessionHelpers");
 const {
   classroomPath,
@@ -77,6 +78,26 @@ async function assertSessionAccess(user, session) {
   }
 
   if (user.role === "student") {
+    const student = await Student.findById(user.profileId).select("assignedTeachers");
+    if (!student) {
+      const error = new Error("Student profile not found");
+      error.statusCode = 404;
+      error.code = "STUDENT_NOT_FOUND";
+      throw error;
+    }
+
+    const sessionTeacherId = String(session.teacher || session.instructor || "");
+    const assignedTeachers = (student.assignedTeachers || []).map((t) =>
+      String(t && t._id ? t._id : t)
+    );
+
+    if (!sessionTeacherId || !assignedTeachers.includes(sessionTeacherId)) {
+      const error = new Error("You are not assigned to this teacher's class");
+      error.statusCode = 403;
+      error.code = "NOT_ASSIGNED";
+      throw error;
+    }
+
     const enrolled = await StudentCourse.findOne({
       studentId: user.profileId,
       courseId: session.course,
@@ -113,14 +134,9 @@ exports.joinClassroom = async (req, res) => {
     if (req.user.role === "teacher") {
       await teacherCheckIn(session);
     } else if (req.user.role === "student") {
-      if (!isClassLive(session)) {
-        const waiting = !session.teacherAttendance?.checkInTime;
-        return res.status(403).json({
-          message: waiting ? "Waiting for instructor to start the class" : "This class has already ended",
-          code: waiting ? "WAITING_FOR_TEACHER" : "CLASS_ENDED",
-          teacherCheckedIn: Boolean(session.teacherAttendance?.checkInTime),
-          teacherCheckedOut: Boolean(session.teacherAttendance?.checkOutTime),
-        });
+      // Connect directly to the video room without waiting for host to admit
+      if (session.teacherAttendance?.checkOutTime || session.status === "completed" || session.status === "conducted") {
+        return res.status(400).json({ message: "This class has already ended", code: "CLASS_ENDED" });
       }
       await markStudentPresent(session, req.user.profileId);
     } else if (session.teacherAttendance?.checkOutTime) {

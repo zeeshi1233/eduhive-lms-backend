@@ -36,7 +36,11 @@ async function createGoogleMeetSpace() {
     // accessType: RESTRICTED is only available for Google Workspace (paid) accounts.
     // For standard @gmail.com accounts, we must omit the config to use the default settings.
     const response = await meet.spaces.create({
-      requestBody: {}
+      requestBody: {
+        config: {
+          accessType: "OPEN",
+        },
+      },
     });
 
     return {
@@ -134,7 +138,13 @@ async function createGoogleMeetSpaceForTeacher(teacher) {
     oauth2Client.setCredentials({ refresh_token: refreshToken });
 
     const meet = google.meet({ version: 'v2', auth: oauth2Client });
-    const response = await meet.spaces.create({ requestBody: {} });
+    const response = await meet.spaces.create({
+      requestBody: {
+        config: {
+          accessType: "OPEN",
+        },
+      },
+    });
 
     return {
       spaceName: response.data.name,

@@ -60,7 +60,13 @@ async function createMeetSpaceAsTeacher(teacherEmail) {
   const auth = getServiceAccountAuth(teacherEmail);
   const meet = google.meet({ version: 'v2', auth });
 
-  const response = await meet.spaces.create({ requestBody: {} });
+  const response = await meet.spaces.create({
+    requestBody: {
+      config: {
+        accessType: "OPEN",
+      },
+    },
+  });
 
   return {
     spaceName: response.data.name,       // e.g. "spaces/ABC123"

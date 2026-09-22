@@ -1,3 +1,4 @@
+const mongoose = require("mongoose")
 const Auth = require("../models/Auth")
 const Teacher = require("../models/Teacher")
 const Student = require("../models/Student")

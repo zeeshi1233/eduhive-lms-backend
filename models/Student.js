@@ -70,8 +70,17 @@ const StudentSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    assignedTeachers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Teacher",
+      },
+    ],
   },
   { timestamps: true }
 )
+
+StudentSchema.index({ assignedTeachers: 1 })
 
 module.exports = mongoose.model("Student", StudentSchema)

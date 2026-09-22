@@ -197,7 +197,7 @@ exports.deleteTeacher = async (req, res) => {
 // =========================
 exports.getStudents = async (req, res) => {
   try {
-    const students = await Student.find()
+    const students = await Student.find().populate("assignedTeachers", "name email phone assignedCourses")
 
     // Auth se emails attach karo
     const studentIds = students.map((s) => s._id)
@@ -1096,6 +1096,7 @@ exports.createSession = async (req, res) => {
     await newSession.save()
     newSession.roomName = `eduhive-class-${newSession._id}`
     newSession.meetingLink = `/classroom/${newSession._id}`
+    newSession.link = newSession.meetingLink
     
     try {
       // Try Service Account (teacher as host) first, fallback to OAuth token

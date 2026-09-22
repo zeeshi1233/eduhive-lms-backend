@@ -20,6 +20,11 @@ const sessionSchema = new mongoose.Schema(
       required: true,
     },
 
+    teacher: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Teacher",
+    },
+
     startTime: {
       type: Date,
       required: true,
@@ -52,6 +57,11 @@ const sessionSchema = new mongoose.Schema(
     },
 
     meetingLink: {
+      type: String,
+      default: "",
+    },
+
+    link: {
       type: String,
       default: "",
     },
@@ -147,6 +157,10 @@ sessionSchema.pre("validate", function () {
   if (!this.duration) this.duration = "60 mins"
   if (!this.type) this.type = "Regular Class"
   if (!this.status) this.status = "Scheduled"
+  if (!this.teacher && this.instructor) this.teacher = this.instructor
+  if (!this.instructor && this.teacher) this.instructor = this.teacher
+  if (!this.link && this.meetingLink) this.link = this.meetingLink
+  if (!this.meetingLink && this.link) this.meetingLink = this.link
 
   if (!this.endTime && this.startTime) {
     const minutes = parseInt(this.duration, 10) || 60
@@ -156,5 +170,7 @@ sessionSchema.pre("validate", function () {
 
 sessionSchema.index({ course: 1, startTime: 1 })
 sessionSchema.index({ instructor: 1, startTime: 1 })
+sessionSchema.index({ teacher: 1, startTime: 1 })
+sessionSchema.index({ course: 1, teacher: 1 })
 
 module.exports = mongoose.model("Session", sessionSchema)
