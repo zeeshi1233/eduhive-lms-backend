@@ -1189,26 +1189,32 @@ exports.getSessionById = async (req, res) => {
       teacherDuration = h > 0 ? `${h} hr${h > 1 ? 's' : ''} ${m} mins` : `${m} mins`
     }
 
+    const isSessionEnded =
+      Boolean(obj.teacherAttendance?.checkOutTime) ||
+      ['conducted', 'completed', 'not_conducted', 'cancelled'].includes(String(obj.status || '').toLowerCase()) ||
+      (obj.startTime && (new Date(obj.startTime).getTime() + (parseInt(obj.duration, 10) || 60) * 60000 < Date.now()));
+
     // Students attendance enriched
     const students = (obj.studentAttendance || []).map(record => {
-      let duration = null
-      if (record.joinedAt && record.leftAt) {
-        const ms = new Date(record.leftAt) - new Date(record.joinedAt)
-        const mins = Math.round(ms / 60000)
-        const h = Math.floor(mins / 60)
-        const m = mins % 60
-        duration = h > 0 ? `${h} hr${h > 1 ? 's' : ''} ${m} mins` : `${m} mins`
+      const effectiveLeftAt = record.leftAt || (isSessionEnded ? (obj.teacherAttendance?.checkOutTime || obj.endTime) : null);
+      let duration = record.durationFormatted || null;
+      if (!duration && record.joinedAt && effectiveLeftAt) {
+        const ms = Math.max(0, new Date(effectiveLeftAt) - new Date(record.joinedAt));
+        const mins = Math.round(ms / 60000);
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        duration = h > 0 ? `${h} hr${h > 1 ? 's' : ''} ${m} mins` : `${m} mins`;
       }
       return {
         _id: record._id,
         student: record.student,
         present: record.present,
         joinedAt: record.joinedAt || null,
-        leftAt: record.leftAt || null,
+        leftAt: record.leftAt || (isSessionEnded && obj.teacherAttendance?.checkOutTime ? obj.teacherAttendance.checkOutTime : record.leftAt) || null,
         duration,
         markedAt: record.markedAt || null,
-      }
-    })
+      };
+    });
 
     const presentCount = students.filter(s => s.present).length
 
