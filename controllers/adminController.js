@@ -1,3 +1,4 @@
+const XLSX = require("xlsx");
 const { createGoogleMeetSpaceForTeacher } = require("../utils/googleMeet");
 const { createMeetSpaceAsTeacher } = require("../utils/googleMeetServiceAccount");
 const Teacher = require("../models/Teacher")
@@ -1518,3 +1519,111 @@ exports.getTeachersByCourse = async (req, res) => {
     res.status(500).json({ message: "Failed to fetch teachers for course", error: error.message })
   }
 }
+
+// =========================
+// Export Sessions to Excel (.xlsx)
+// =========================
+exports.exportSessionsExcel = async (req, res) => {
+  try {
+    const { teacherId, courseId, status, type, startDate, endDate, search } = req.query;
+    const filter = {};
+    const role = req.user.role;
+
+    if (role === "admin") {
+      if (teacherId) filter.instructor = teacherId;
+    } else if (role === "teacher") {
+      filter.instructor = req.user.profileId;
+    } else {
+      return res.status(403).json({ message: "Only admin and teachers can export sessions" });
+    }
+
+    if (courseId) filter.course = courseId;
+    if (type) filter.type = type;
+    if (status) filter.status = normalizeStatus(status);
+
+    if (startDate || endDate) {
+      filter.startTime = {};
+      if (startDate) {
+        const s = new Date(startDate);
+        s.setHours(0, 0, 0, 0);
+        filter.startTime.$gte = s;
+      }
+      if (endDate) {
+        const e = new Date(endDate);
+        e.setHours(23, 59, 59, 999);
+        filter.startTime.$lte = e;
+      }
+    }
+
+    if (search) {
+      const sRegex = new RegExp(escapeRegex(search), "i");
+      filter.$or = [{ title: sRegex }, { topic: sRegex }, { description: sRegex }];
+    }
+
+    const sessions = await fetchFormattedSessions(filter);
+
+    const fmtDateStr = (d) =>
+      d ? new Date(d).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "—";
+    const fmtTimeStr = (d) =>
+      d ? new Date(d).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true }) : "—";
+
+    const rows = sessions.map((sess) => {
+      const courseTitle = sess.course?.title || sess.courseTitle || "—";
+      const courseCode = sess.course?.code || "—";
+      const teacherName = sess.instructor?.name || sess.teacher?.name || "—";
+      const startTimeStr = fmtTimeStr(sess.startTime);
+      const endTimeStr = fmtTimeStr(sess.endTime);
+      const schedTime = startTimeStr !== "—" ? `${startTimeStr} - ${endTimeStr}` : "—";
+
+      const studentAtt = Array.isArray(sess.studentAttendance) ? sess.studentAttendance : [];
+      const presentCount = studentAtt.filter((s) => s.present).length;
+
+      return {
+        "Title": sess.title || "Untitled Session",
+        "Course": courseTitle,
+        "Course Code": courseCode,
+        "Teacher": teacherName,
+        "Date": fmtDateStr(sess.startTime),
+        "Scheduled Time": schedTime,
+        "Duration": sess.duration || "60 mins",
+        "Status": sess.status || "Scheduled",
+        "Class Type": sess.type || "Regular Class",
+        "Conducted Details": sess.notConductedReason
+          ? `Not Conducted (${sess.notConductedReason})`
+          : (sess.status === "conducted" ? "Conducted" : sess.status || "Scheduled"),
+        "Teacher Checked In": sess.teacherAttendance?.checkInTime ? fmtTimeStr(sess.teacherAttendance.checkInTime) : "No",
+        "Teacher Checked Out": sess.teacherAttendance?.checkOutTime ? fmtTimeStr(sess.teacherAttendance.checkOutTime) : "No",
+        "Teacher Duration": sess.teacherAttendance?.durationFormatted || "0 mins",
+        "Students Present": presentCount,
+        "Total Attendees Recorded": studentAtt.length,
+      };
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Message: "No sessions found for the specified criteria." }]);
+
+    if (rows.length) {
+      const colWidths = Object.keys(rows[0]).map((key) => {
+        const maxLen = Math.max(key.length, ...rows.map((r) => String(r[key] || "").length));
+        return { wch: Math.min(45, maxLen + 3) };
+      });
+      ws["!cols"] = colWidths;
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, "Sessions");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="sessions-export-${Date.now()}.xlsx"`
+    );
+    return res.status(200).send(buffer);
+  } catch (error) {
+    console.error("Export sessions error:", error);
+    return res.status(500).json({ message: "Failed to export sessions", error: error.message });
+  }
+};

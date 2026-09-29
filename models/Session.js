@@ -1,4 +1,21 @@
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
+
+const attendanceIntervalSchema = new mongoose.Schema(
+  {
+    checkInTime: {
+      type: Date,
+      required: true,
+    },
+    checkOutTime: {
+      type: Date,
+    },
+    durationMinutes: {
+      type: Number,
+      default: 0,
+    },
+  },
+  { _id: true }
+);
 
 const sessionSchema = new mongoose.Schema(
   {
@@ -95,6 +112,11 @@ const sessionSchema = new mongoose.Schema(
       default: "Scheduled",
     },
 
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+
     notConductedReason: {
       type: String,
       enum: ["Teacher Not Present", "Student Not Present", "Others"],
@@ -106,12 +128,13 @@ const sessionSchema = new mongoose.Schema(
       checkOutTime: Date,
       durationMinutes: {
         type: Number,
-        default: 0
+        default: 0,
       },
       durationFormatted: {
         type: String,
-        default: ""
-      }
+        default: "",
+      },
+      intervals: [attendanceIntervalSchema],
     },
 
     studentAttendance: [
@@ -121,17 +144,21 @@ const sessionSchema = new mongoose.Schema(
           ref: "Student",
           required: true,
         },
-        present: Boolean,
+        present: {
+          type: Boolean,
+          default: false,
+        },
         joinedAt: Date,
         leftAt: Date,
         durationMinutes: {
           type: Number,
-          default: 0
+          default: 0,
         },
         durationFormatted: {
           type: String,
-          default: ""
+          default: "",
         },
+        intervals: [attendanceIntervalSchema],
         markedAt: {
           type: Date,
           default: Date.now,
@@ -151,26 +178,45 @@ const sessionSchema = new mongoose.Schema(
     paidAt: Date,
   },
   { timestamps: true }
-)
+);
 
 sessionSchema.pre("validate", function () {
-  if (!this.duration) this.duration = "60 mins"
-  if (!this.type) this.type = "Regular Class"
-  if (!this.status) this.status = "Scheduled"
-  if (!this.teacher && this.instructor) this.teacher = this.instructor
-  if (!this.instructor && this.teacher) this.instructor = this.teacher
-  if (!this.link && this.meetingLink) this.link = this.meetingLink
-  if (!this.meetingLink && this.link) this.meetingLink = this.link
+  if (!this.duration) this.duration = "60 mins";
+  if (!this.type) this.type = "Regular Class";
+  if (!this.status) this.status = "Scheduled";
+  if (!this.teacher && this.instructor) this.teacher = this.instructor;
+  if (!this.instructor && this.teacher) this.instructor = this.teacher;
+  if (!this.link && this.meetingLink) this.link = this.meetingLink;
+  if (!this.meetingLink && this.link) this.meetingLink = this.link;
 
-  if (!this.endTime && this.startTime) {
-    const minutes = parseInt(this.duration, 10) || 60
-    this.endTime = new Date(this.startTime.getTime() + minutes * 60 * 1000)
+  if (this.startTime) {
+    const minutes = parseInt(this.duration, 10) || 60;
+    if (!this.endTime) {
+      this.endTime = new Date(this.startTime.getTime() + minutes * 60 * 1000);
+    }
   }
-})
 
-sessionSchema.index({ course: 1, startTime: 1 })
-sessionSchema.index({ instructor: 1, startTime: 1 })
-sessionSchema.index({ teacher: 1, startTime: 1 })
-sessionSchema.index({ course: 1, teacher: 1 })
+  if (this.endTime && Date.now() > this.endTime.getTime()) {
+    if (this.status !== "ongoing") {
+      this.isActive = false;
+    }
+  }
+});
 
-module.exports = mongoose.model("Session", sessionSchema)
+sessionSchema.methods.isExpired = function () {
+  const end = this.endTime
+    ? new Date(this.endTime).getTime()
+    : this.startTime
+    ? new Date(this.startTime).getTime() + (parseInt(this.duration, 10) || 60) * 60000
+    : null;
+  if (!end) return false;
+  return Date.now() > end;
+};
+
+sessionSchema.index({ course: 1, startTime: 1 });
+sessionSchema.index({ instructor: 1, startTime: 1 });
+sessionSchema.index({ teacher: 1, startTime: 1 });
+sessionSchema.index({ course: 1, teacher: 1 });
+sessionSchema.index({ status: 1, startTime: 1 });
+
+module.exports = mongoose.model("Session", sessionSchema);

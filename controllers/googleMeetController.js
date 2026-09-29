@@ -1,4 +1,3 @@
-
 const Teacher = require("../models/Teacher");
 
 // Teacher-level: generate Google OAuth URL
@@ -27,7 +26,6 @@ exports.teacherGoogleConnect = async (req, res) => {
       });
     }
 
-    // Get teacher's email from Google
     oauth2Client.setCredentials(tokens);
     const oauth2 = require("googleapis").google.oauth2({ version: "v2", auth: oauth2Client });
     const me = await oauth2.userinfo.get();
@@ -40,7 +38,7 @@ exports.teacherGoogleConnect = async (req, res) => {
     });
 
     res.status(200).json({
-      message: `Google account connected! Teacher is now the host for all their sessions. (Google Email: ${googleEmail})`,
+      message: "Google account connected! Teacher is now the host for all their sessions.",
       googleEmail,
     });
   } catch (error) {
@@ -48,6 +46,7 @@ exports.teacherGoogleConnect = async (req, res) => {
     res.status(500).json({ message: "Failed to connect Google account", error: error.message });
   }
 };
+
 const mongoose = require("mongoose");
 const StudentCourse = require("../models/StudentCourse");
 const Student = require("../models/Student");
@@ -60,6 +59,7 @@ const {
   teacherCheckOut,
   markStudentPresent,
   markStudentLeft,
+  isSessionExpired,
   isClassLive,
 } = require("../utils/classroom");
 const { getGoogleOAuthClient, syncGoogleMeetAttendance } = require("../utils/googleMeet");
@@ -119,13 +119,21 @@ async function assertSessionAccess(user, session) {
 
 exports.joinClassroom = async (req, res) => {
   try {
-    const { sessionId } = req.body || {};
+    const sessionId = req.params.sessionId || req.body?.sessionId;
     if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
       return res.status(400).json({ message: "Valid sessionId is required" });
     }
 
     const session = await loadSessionForClassroom(sessionId);
     await assertSessionAccess(req.user, session);
+
+    // Auto-expire meeting links after session end time
+    if (isSessionExpired(session)) {
+      return res.status(400).json({
+        message: "This session has expired.",
+        code: "SESSION_EXPIRED",
+      });
+    }
 
     if (session.status === "Cancelled") {
       return res.status(400).json({ message: "This class was cancelled", code: "CLASS_CANCELLED" });
@@ -134,7 +142,6 @@ exports.joinClassroom = async (req, res) => {
     if (req.user.role === "teacher") {
       await teacherCheckIn(session);
     } else if (req.user.role === "student") {
-      // Connect directly to the video room without waiting for host to admit
       if (session.teacherAttendance?.checkOutTime || session.status === "completed" || session.status === "conducted") {
         return res.status(400).json({ message: "This class has already ended", code: "CLASS_ENDED" });
       }
@@ -143,7 +150,7 @@ exports.joinClassroom = async (req, res) => {
       return res.status(400).json({ message: "This class has already ended", code: "CLASS_ENDED" });
     }
 
-    const displayName = await getParticipantName(req.user, req.body.participantName);
+    const displayName = await getParticipantName(req.user, req.body?.participantName);
     const formatted = await fetchFormattedSessionById(session._id);
 
     res.status(200).json({
@@ -164,9 +171,15 @@ exports.joinClassroom = async (req, res) => {
   }
 };
 
+exports.joinSessionRedirect = (req, res) => {
+  const sessionId = req.params.sessionId;
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  return res.redirect(`${frontendUrl}/classroom/${sessionId}`);
+};
+
 exports.leaveClassroom = async (req, res) => {
   try {
-    const { sessionId } = req.body || {};
+    const sessionId = req.params.sessionId || req.body?.sessionId;
     if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
       return res.status(400).json({ message: "Valid sessionId is required" });
     }
@@ -193,7 +206,7 @@ exports.leaveClassroom = async (req, res) => {
 
 exports.getClassroom = async (req, res) => {
   try {
-    const { sessionId } = req.params;
+    const sessionId = req.params.sessionId;
     if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
       return res.status(400).json({ message: "Valid sessionId is required" });
     }
@@ -219,7 +232,7 @@ exports.getClassroom = async (req, res) => {
 
 exports.syncAttendance = async (req, res) => {
   try {
-    const { sessionId } = req.params;
+    const sessionId = req.params.sessionId;
     if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
       return res.status(400).json({ message: "Valid sessionId is required" });
     }
@@ -234,33 +247,25 @@ exports.syncAttendance = async (req, res) => {
       return res.status(200).json({ message: result.message });
     }
 
-    // Process attendanceData against enrolled students (using email matching if available, or just keeping the raw list for now)
-    // For a strict LMS, you'd match the Google Meet email to the Student's email
-    // Here we can simply store the raw sync data in the session or map it.
-    
-    // For simplicity, we just return the data to the frontend so it can be viewed.
-    // Or we could map it to `session.studentAttendance` if emails matched.
-    
     res.status(200).json({
       message: "Attendance synced from Google Meet",
-      attendanceData: result.attendanceData
+      attendanceData: result.attendanceData,
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Failed to sync attendance" });
   }
 };
 
-// Google OAuth endpoints
 exports.getGoogleAuthUrl = (req, res) => {
   const oauth2Client = getGoogleOAuthClient();
   const authUrl = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
+    access_type: "offline",
     scope: [
-      'https://www.googleapis.com/auth/meetings.space.created',
-      'https://www.googleapis.com/auth/meetings.space.readonly',
-      'https://www.googleapis.com/auth/calendar.events'
+      "https://www.googleapis.com/auth/meetings.space.created",
+      "https://www.googleapis.com/auth/meetings.space.readonly",
+      "https://www.googleapis.com/auth/calendar.events",
     ],
-    prompt: 'consent'
+    prompt: "consent",
   });
   res.status(200).json({ authUrl });
 };
@@ -270,11 +275,10 @@ exports.googleOAuthCallback = async (req, res) => {
     const { code } = req.query;
     const oauth2Client = getGoogleOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
-    
-    // Return the refresh token so admin can save it in .env
+
     res.status(200).json({
       message: "OAuth successful! Copy the refresh token below and add it to your .env as GOOGLE_REFRESH_TOKEN",
-      refreshToken: tokens.refresh_token
+      refreshToken: tokens.refresh_token,
     });
   } catch (error) {
     res.status(500).json({ message: "Google OAuth failed", error: error.message });

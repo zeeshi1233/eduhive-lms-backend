@@ -1,18 +1,17 @@
 const Session = require('../models/Session');
 const Student = require('../models/Student');
+const Attendance = require('../models/Attendance');
+const { calculateAccurateDuration, parseDurationMinutes } = require('../utils/classroom');
 
 /**
  * POST /api/webhooks/google-meet
  * Receives Google Cloud Pub/Sub push notifications for Meet events.
  * Handles participant join/leave to auto-update attendance checkout times.
- * IMPORTANT: Always return 200 immediately to acknowledge the Pub/Sub message.
  */
 exports.handleGoogleMeetWebhook = async (req, res) => {
-  // Acknowledge Pub/Sub IMMEDIATELY to prevent re-delivery
   res.status(200).json({ received: true });
 
   try {
-    // Optional: verify the token to ensure requests come from Google
     const token = req.query.token;
     if (process.env.GOOGLE_PUBSUB_TOKEN && token !== process.env.GOOGLE_PUBSUB_TOKEN) {
       console.warn('[Webhook] Invalid Pub/Sub token — request rejected silently.');
@@ -25,7 +24,6 @@ exports.handleGoogleMeetWebhook = async (req, res) => {
       return;
     }
 
-    // Decode base64 payload
     const rawPayload = Buffer.from(message.data, 'base64').toString('utf8');
     let payload;
     try {
@@ -38,7 +36,6 @@ exports.handleGoogleMeetWebhook = async (req, res) => {
     const eventType = payload.type || payload['@type'] || '';
     console.log('[Webhook] Google Meet event received:', eventType, JSON.stringify(payload).slice(0, 200));
 
-    // ── Handle participant LEFT event ──────────────────────────────────────
     if (
       eventType.includes('participant.v2.left') ||
       eventType.includes('participantSession.ended')
@@ -60,7 +57,6 @@ exports.handleGoogleMeetWebhook = async (req, res) => {
         return;
       }
 
-      // Find the session by googleMeetSpace field
       const session = await Session.findOne({ googleMeetSpace: spaceName });
       if (!session) {
         console.warn(`[Webhook] No session found for space: ${spaceName}`);
@@ -68,59 +64,93 @@ exports.handleGoogleMeetWebhook = async (req, res) => {
       }
 
       const now = new Date(endTime);
+      const scheduledMins = parseDurationMinutes(session.duration);
 
-      // ── Teacher checkout ──
       const instructorEmailMatch = participantEmail &&
         session.teacherAttendance?.checkInTime &&
         !session.teacherAttendance?.checkOutTime;
 
       if (instructorEmailMatch) {
-        // Try to match by teacher's email if stored, otherwise treat first left as teacher
         session.set('teacherAttendance.checkOutTime', now);
-        
-        // Calculate duration
-        const checkIn = new Date(session.teacherAttendance.checkInTime);
-        const durationMs = now - checkIn;
-        const durationMins = Math.round(durationMs / 60000);
-        const h = Math.floor(durationMins / 60);
-        const m = durationMins % 60;
-        const durationFormatted = h > 0 ? `${h}h ${m}m` : `${m} mins`;
-        
-        session.set('teacherAttendance.durationMinutes', durationMins);
-        session.set('teacherAttendance.durationFormatted', durationFormatted);
-        
-        console.log(`[Webhook] Teacher checkout recorded for session ${session._id}: ${durationFormatted}`);
+
+        if (!Array.isArray(session.teacherAttendance.intervals)) {
+          session.teacherAttendance.intervals = [];
+          if (session.teacherAttendance.checkInTime) {
+            session.teacherAttendance.intervals.push({
+              checkInTime: session.teacherAttendance.checkInTime,
+              checkOutTime: now,
+            });
+          }
+        } else {
+          const openInv = session.teacherAttendance.intervals.find((i) => !i.checkOutTime);
+          if (openInv) openInv.checkOutTime = now;
+        }
+
+        const teacherDur = calculateAccurateDuration(
+          session.teacherAttendance.intervals,
+          session.startTime,
+          session.endTime,
+          scheduledMins
+        );
+        session.set('teacherAttendance.durationMinutes', teacherDur.durationMinutes);
+        session.set('teacherAttendance.durationFormatted', teacherDur.durationFormatted);
+        console.log(`[Webhook] Teacher checkout recorded for session ${session._id}: ${teacherDur.durationFormatted}`);
       }
 
-      // ── Student checkout ──
       if (Array.isArray(session.studentAttendance)) {
         let updated = false;
-        
-        // Try to match by email if participantEmail is available
+
+        const updateStudentRec = async (record) => {
+          record.leftAt = now;
+          if (!Array.isArray(record.intervals)) {
+            record.intervals = [];
+            if (record.joinedAt) {
+              record.intervals.push({ checkInTime: record.joinedAt, checkOutTime: now });
+            }
+          } else {
+            const openInv = record.intervals.find((i) => !i.checkOutTime);
+            if (openInv) openInv.checkOutTime = now;
+          }
+
+          const studentDur = calculateAccurateDuration(
+            record.intervals,
+            session.startTime,
+            session.endTime,
+            scheduledMins
+          );
+          record.durationMinutes = studentDur.durationMinutes;
+          record.durationFormatted = studentDur.durationFormatted;
+
+          try {
+            await Attendance.findOneAndUpdate(
+              { student: record.student, session: session._id },
+              {
+                intervals: record.intervals,
+                durationMinutes: studentDur.durationMinutes,
+                durationFormatted: studentDur.durationFormatted,
+                markedAt: now,
+              },
+              { upsert: true }
+            );
+          } catch (e) {
+            console.error('Error syncing Attendance in webhook:', e.message);
+          }
+        };
+
         if (participantEmail) {
-          // Find student by email from Student model
-          const student = await Student.findOne({ 
+          const student = await Student.findOne({
             $or: [
               { email: participantEmail },
-              { googleEmail: participantEmail }
-            ]
+              { googleEmail: participantEmail },
+            ],
           }).select('_id');
 
           if (student) {
             const record = session.studentAttendance.find(
-              r => String(r.student) === String(student._id) && r.present && !r.leftAt
+              (r) => String(r.student) === String(student._id) && r.present && !r.leftAt
             );
             if (record) {
-              record.leftAt = now;
-              
-              if (record.joinedAt) {
-                const durationMs = now - new Date(record.joinedAt);
-                const mins = Math.round(durationMs / 60000);
-                const h = Math.floor(mins / 60);
-                const m = mins % 60;
-                record.durationMinutes = mins;
-                record.durationFormatted = h > 0 ? `${h}h ${m}m` : `${m} mins`;
-              }
+              await updateStudentRec(record);
               updated = true;
               console.log(`[Webhook] Student ${student._id} checkout recorded at ${now.toISOString()}`);
             }
@@ -128,19 +158,10 @@ exports.handleGoogleMeetWebhook = async (req, res) => {
         }
 
         if (!updated) {
-          // Fallback: update the first student who is present and hasn't left yet
-          const record = session.studentAttendance.find(r => r.present && !r.leftAt);
+          const record = session.studentAttendance.find((r) => r.present && !r.leftAt);
           if (record) {
-            record.leftAt = now;
-            if (record.joinedAt) {
-              const durationMs = now - new Date(record.joinedAt);
-              const mins = Math.round(durationMs / 60000);
-              const h = Math.floor(mins / 60);
-              const m = mins % 60;
-              record.durationMinutes = mins;
-              record.durationFormatted = h > 0 ? `${h}h ${m}m` : `${m} mins`;
-            }
-            console.log(`[Webhook] Fallback student checkout recorded.`);
+            await updateStudentRec(record);
+            console.log('[Webhook] Fallback student checkout recorded.');
           }
         }
       }
@@ -150,29 +171,14 @@ exports.handleGoogleMeetWebhook = async (req, res) => {
       return;
     }
 
-    // ── Handle participant JOINED event ────────────────────────────────────
     if (
       eventType.includes('participant.v2.joined') ||
       eventType.includes('participantSession.started')
     ) {
-      const spaceName = payload.space?.name || payload.conferenceRecord?.space || null;
-      if (!spaceName) return;
-
-      const session = await Session.findOne({ googleMeetSpace: spaceName });
-      if (!session) return;
-
-      const joinTime = payload.participantSession?.startTime || new Date().toISOString();
-      const participantEmail = payload.participant?.signedinUser?.user || null;
-
-      console.log(`[Webhook] Participant joined: ${participantEmail} at ${joinTime} for session ${session._id}`);
-      // Join time is already tracked by the platform's /api/classroom/join endpoint
-      // This is just for logging / future use
+      console.log('[Webhook] Participant joined notification logged.');
       return;
     }
-
-    console.log('[Webhook] Unhandled event type:', eventType);
   } catch (err) {
-    // Never let errors propagate — Pub/Sub already acknowledged above
-    console.error('[Webhook] Error processing Google Meet event:', err.message, err.stack);
+    console.error('[Webhook] Error processing Google Meet event:', err.message);
   }
 };
