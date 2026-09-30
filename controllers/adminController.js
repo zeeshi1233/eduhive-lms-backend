@@ -1024,6 +1024,8 @@ exports.createSession = async (req, res) => {
       description,
       status,
       clientOffset,
+      meetingLink,
+      googleMeetLink,
     } = req.body
 
     if (!title || !courseId || !teacherId || !startTime) {
@@ -1096,8 +1098,12 @@ exports.createSession = async (req, res) => {
 
     await newSession.save()
     newSession.roomName = `eduhive-class-${newSession._id}`
-    newSession.meetingLink = `/classroom/${newSession._id}`
-    newSession.link = newSession.meetingLink
+    const initialLink = googleMeetLink || meetingLink || `/classroom/${newSession._id}`
+    newSession.meetingLink = initialLink
+    newSession.link = initialLink
+    if (googleMeetLink) {
+      newSession.googleMeetLink = googleMeetLink
+    }
     
     try {
       // Try Service Account (teacher as host) first, fallback to OAuth token
@@ -1115,10 +1121,14 @@ exports.createSession = async (req, res) => {
         console.warn("[Session] Service Account failed, falling back to OAuth:", saErr.message);
         meet = await createGoogleMeetSpaceForTeacher(teacher);
       }
-      newSession.googleMeetSpace = meet.spaceName;
-      newSession.googleMeetLink = meet.meetingUri;
+      if (meet && meet.meetingUri) {
+        newSession.googleMeetSpace = meet.spaceName || "";
+        newSession.googleMeetLink = meet.meetingUri;
+        newSession.meetingLink = meet.meetingUri;
+        newSession.link = meet.meetingUri;
+      }
     } catch(e) {
-      console.log("Failed to create google meet automatically:", e.message);
+      console.warn("[Session] Failed to create google meet automatically:", e.message);
     }
     await newSession.save()
     const session = await fetchFormattedSessionById(newSession._id)
@@ -1332,6 +1342,13 @@ exports.updateSession = async (req, res) => {
       if (currentStart) {
         updates.endTime = computeEndTime(currentStart, duration)
       }
+    }
+
+    if (req.body.googleMeetLink !== undefined || req.body.meetingLink !== undefined) {
+      const meetUrl = req.body.googleMeetLink || req.body.meetingLink || "";
+      updates.googleMeetLink = meetUrl;
+      updates.meetingLink = meetUrl || `/classroom/${id}`;
+      updates.link = meetUrl || `/classroom/${id}`;
     }
 
     if (updates.status && updates.status !== "not_conducted") {

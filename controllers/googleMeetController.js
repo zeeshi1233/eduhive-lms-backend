@@ -19,6 +19,9 @@ exports.teacherGoogleConnect = async (req, res) => {
     const { getGoogleOAuthClient } = require("../utils/googleMeet");
     const oauth2Client = getGoogleOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
+    if (tokens.refresh_token) {
+      process.env.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
+    }
 
     if (!tokens.refresh_token) {
       return res.status(400).json({
