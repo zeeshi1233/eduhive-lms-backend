@@ -13,6 +13,9 @@ const attendanceIntervalSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    lastHeartbeat: {
+      type: Date,
+    },
   },
   { _id: true }
 );
@@ -46,6 +49,7 @@ const attendanceSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    lastHeartbeat: Date,
     markedAt: Date,
   },
   { timestamps: true }

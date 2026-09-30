@@ -13,6 +13,9 @@ const attendanceIntervalSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    lastHeartbeat: {
+      type: Date,
+    },
   },
   { _id: true }
 );
@@ -126,6 +129,7 @@ const sessionSchema = new mongoose.Schema(
     teacherAttendance: {
       checkInTime: Date,
       checkOutTime: Date,
+      lastHeartbeat: Date,
       durationMinutes: {
         type: Number,
         default: 0,
@@ -150,6 +154,7 @@ const sessionSchema = new mongoose.Schema(
         },
         joinedAt: Date,
         leftAt: Date,
+        lastHeartbeat: Date,
         durationMinutes: {
           type: Number,
           default: 0,

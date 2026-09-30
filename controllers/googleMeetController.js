@@ -51,6 +51,7 @@ exports.teacherGoogleConnect = async (req, res) => {
 };
 
 const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
 const StudentCourse = require("../models/StudentCourse");
 const Student = require("../models/Student");
 const { fetchFormattedSessionById } = require("../utils/sessionHelpers");
@@ -62,6 +63,7 @@ const {
   teacherCheckOut,
   markStudentPresent,
   markStudentLeft,
+  recordHeartbeat,
   isSessionExpired,
   isClassLive,
 } = require("../utils/classroom");
@@ -130,7 +132,6 @@ exports.joinClassroom = async (req, res) => {
     const session = await loadSessionForClassroom(sessionId);
     await assertSessionAccess(req.user, session);
 
-    // Auto-expire meeting links after session end time
     if (isSessionExpired(session)) {
       return res.status(400).json({
         message: "This session has expired.",
@@ -156,8 +157,14 @@ exports.joinClassroom = async (req, res) => {
     const displayName = await getParticipantName(req.user, req.body?.participantName);
     const formatted = await fetchFormattedSessionById(session._id);
 
+    const actualMeetUrl =
+      session.googleMeetLink ||
+      (session.meetingLink && session.meetingLink.startsWith("http") ? session.meetingLink : null) ||
+      (session.link && session.link.startsWith("http") ? session.link : null) ||
+      session.googleMeetLink;
+
     res.status(200).json({
-      googleMeetLink: session.googleMeetLink,
+      googleMeetLink: actualMeetUrl,
       googleMeetSpace: session.googleMeetSpace,
       roomName: session.roomName,
       classroomPath: classroomPath(session._id),
@@ -174,10 +181,134 @@ exports.joinClassroom = async (req, res) => {
   }
 };
 
-exports.joinSessionRedirect = (req, res) => {
+exports.joinSessionRedirect = async (req, res) => {
   const sessionId = req.params.sessionId;
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-  return res.redirect(`${frontendUrl}/classroom/${sessionId}`);
+
+  if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+    return res.status(400).send("Invalid session identifier");
+  }
+
+  const token =
+    req.query.token ||
+    (req.headers.authorization && req.headers.authorization.split(" ")[1]) ||
+    req.cookies?.token;
+
+  if (!token) {
+    return res.redirect(frontendUrl + "/classroom/" + sessionId);
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = {
+      id: decoded.id,
+      role: decoded.role,
+      profileId: decoded.profileId,
+    };
+
+    const session = await loadSessionForClassroom(sessionId);
+
+    if (isSessionExpired(session)) {
+      return res.redirect(frontendUrl + "/classroom/" + sessionId + "?error=expired");
+    }
+
+    if (session.status === "Cancelled") {
+      return res.redirect(frontendUrl + "/classroom/" + sessionId + "?error=cancelled");
+    }
+
+    try {
+      await assertSessionAccess(user, session);
+    } catch (accessErr) {
+      console.warn("[Redirect Join] Access denied for user " + user.id + ": " + accessErr.message);
+      return res.redirect(
+        frontendUrl + "/classroom/" + sessionId + "?error=" + encodeURIComponent(accessErr.message)
+      );
+    }
+
+    if (user.role === "teacher") {
+      await teacherCheckIn(session);
+    } else if (user.role === "student") {
+      if (session.teacherAttendance?.checkOutTime || session.status === "completed" || session.status === "conducted") {
+        return res.redirect(frontendUrl + "/classroom/" + sessionId + "?error=ended");
+      }
+      await markStudentPresent(session, user.profileId);
+    }
+
+    const targetMeetingUrl =
+      session.googleMeetLink ||
+      (session.meetingLink && session.meetingLink.startsWith("http") ? session.meetingLink : null) ||
+      (session.link && session.link.startsWith("http") ? session.link : null);
+
+    if (req.query.direct === "true" && targetMeetingUrl) {
+      return res.redirect(targetMeetingUrl);
+    }
+
+    return res.redirect(
+      frontendUrl + "/classroom/" + sessionId + "?autoLaunch=true&token=" + encodeURIComponent(token)
+    );
+  } catch (err) {
+    console.error("[Redirect Join Error]:", err.message);
+    if (err.name === "JsonWebTokenError" || err.name === "TokenExpiredError") {
+      return res.redirect(
+        frontendUrl + "/login?error=InvalidToken&redirect=" + encodeURIComponent("/api/sessions/join/" + sessionId)
+      );
+    }
+    return res.redirect(frontendUrl + "/classroom/" + sessionId + "?error=" + encodeURIComponent(err.message));
+  }
+};
+
+exports.sessionHeartbeat = async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ message: "Valid sessionId is required" });
+    }
+
+    const session = await loadSessionForClassroom(sessionId);
+    if (isSessionExpired(session)) {
+      return res.status(400).json({ message: "Session expired", code: "SESSION_EXPIRED" });
+    }
+
+    if (session.status === "Cancelled") {
+      return res.status(400).json({ message: "Session cancelled", code: "CLASS_CANCELLED" });
+    }
+
+    const result = await recordHeartbeat(session, req.user);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Heartbeat recording failed" });
+  }
+};
+
+exports.getTrackedSessionLink = async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ message: "Valid sessionId is required" });
+    }
+
+    const session = await loadSessionForClassroom(sessionId);
+    await assertSessionAccess(req.user, session);
+
+    const apiBase = process.env.API_URL || process.env.BACKEND_URL || "";
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+
+    const token = req.headers.authorization?.split(" ")[1] || "";
+    const generalRedirectUrl = apiBase + "/api/sessions/join/" + session._id;
+    const personalRedirectUrl = token ? (generalRedirectUrl + "?token=" + token) : generalRedirectUrl;
+    const directMeetingLink = session.googleMeetLink || session.meetingLink || "";
+
+    res.status(200).json({
+      sessionId: session._id,
+      trackedLink: generalRedirectUrl,
+      personalTrackedLink: personalRedirectUrl,
+      classroomUrl: frontendUrl + "/classroom/" + session._id,
+      googleMeetLink: directMeetingLink,
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    res.status(status).json({ message: error.message || "Failed to generate link" });
+  }
 };
 
 exports.leaveClassroom = async (req, res) => {
@@ -217,10 +348,15 @@ exports.getClassroom = async (req, res) => {
     const session = await loadSessionForClassroom(sessionId);
     await assertSessionAccess(req.user, session);
 
+    const actualMeetUrl =
+      session.googleMeetLink ||
+      (session.meetingLink && session.meetingLink.startsWith("http") ? session.meetingLink : null) ||
+      (session.link && session.link.startsWith("http") ? session.link : null);
+
     const formatted = await fetchFormattedSessionById(session._id);
     res.status(200).json({
       session: formatted,
-      googleMeetLink: session.googleMeetLink,
+      googleMeetLink: actualMeetUrl,
       roomName: formatted.roomName,
       classroomPath: formatted.classroomPath,
       isLive: formatted.isLive,

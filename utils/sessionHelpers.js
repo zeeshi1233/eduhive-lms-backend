@@ -108,6 +108,10 @@ function formatSession(session) {
 
   const roomName = obj.roomName || classroomRoomName(obj._id);
   const joinPath = classroomPath(obj._id);
+  const apiBase = process.env.API_URL || process.env.BACKEND_URL || "";
+  const trackedRedirectPath = "/api/sessions/join/" + obj._id;
+  const trackedRedirectUrl = apiBase ? (apiBase + trackedRedirectPath) : trackedRedirectPath;
+  const rawMeetUrl = obj.googleMeetLink || (obj.meetingLink && obj.meetingLink.startsWith("http") ? obj.meetingLink : "") || (obj.link && obj.link.startsWith("http") ? obj.link : "");
   const attendance = obj.teacherAttendance || {};
   const teacherAttendanceStatus = getTeacherAttendanceStatus(obj);
   const isExpired = isSessionExpired(obj);
@@ -154,15 +158,19 @@ function formatSession(session) {
       "",
     instructor,
     teacher,
-    link: obj.googleMeetLink || obj.link || obj.meetingLink || joinPath,
+    link: trackedRedirectPath,
+    rawMeetingLink: rawMeetUrl,
+    googleMeetLink: rawMeetUrl,
+    trackedLink: trackedRedirectPath,
+    trackedJoinUrl: trackedRedirectUrl,
     duration,
     type: obj.type || "Regular Class",
     status: obj.status || "Scheduled",
     notConductedReason: obj.notConductedReason || "",
     roomName,
     classroomPath: joinPath,
-    joinUrl: obj.googleMeetLink || joinPath,
-    meetingLink: obj.googleMeetLink || obj.meetingLink || joinPath,
+    joinUrl: joinPath,
+    meetingLink: trackedRedirectPath,
     description: obj.description || "",
     topic: obj.topic || "",
     endTime,

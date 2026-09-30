@@ -3,15 +3,15 @@ const Teacher = require("../models/Teacher");
 const Student = require("../models/Student");
 const Admin = require("../models/Admin");
 
-const MIN_CONDUCTED_RATIO = 0.5; // at least 50% of scheduled duration
+const MIN_CONDUCTED_RATIO = 0.5;
 const MIN_CONDUCTED_MINUTES = 15;
 
 function classroomPath(sessionId) {
-  return `/classroom/${sessionId}`;
+  return "/classroom/" + sessionId;
 }
 
 function classroomRoomName(sessionId) {
-  return `eduhive-class-${sessionId}`;
+  return "eduhive-class-" + sessionId;
 }
 
 function parseDurationMinutes(duration) {
@@ -47,17 +47,6 @@ function isClassLive(session) {
   return getTeacherAttendanceStatus(session) === "checked-in";
 }
 
-/**
- * Accurately calculate active duration spent strictly within the scheduled session window.
- * 
- * Rules:
- * 1. Only count active time spent *within* the valid window of the scheduled session [sessionStart, sessionEnd]
- *    (early check-ins before sessionStart are clipped to sessionStart, checkouts after sessionEnd are clipped to sessionEnd).
- * 2. Sum up the actual time elapsed between each valid check-in and check-out pair during that class.
- * 3. Overlapping or duplicate intervals are merged so time is never double-counted.
- * 4. Idle intervals outside or between check-in/out pairs are excluded.
- * 5. Total duration cannot exceed scheduled duration.
- */
 function calculateAccurateDuration(intervals, sessionStartTime, sessionEndTime, scheduledMinutes = 60) {
   if (!Array.isArray(intervals) || intervals.length === 0) {
     return { durationMinutes: 0, durationFormatted: "0 mins" };
@@ -86,12 +75,13 @@ function calculateAccurateDuration(intervals, sessionStartTime, sessionEndTime, 
     let outMs;
     if (checkOut) {
       outMs = new Date(checkOut).getTime();
+    } else if (interval.lastHeartbeat) {
+      outMs = Math.min(new Date(interval.lastHeartbeat).getTime(), endMs);
     } else {
       outMs = Math.min(nowMs, endMs);
     }
     if (Number.isNaN(outMs)) continue;
 
-    // Clip strictly to scheduled session window
     const effectiveIn = Math.max(inMs, startMs);
     const effectiveOut = Math.min(outMs, endMs);
 
@@ -104,10 +94,8 @@ function calculateAccurateDuration(intervals, sessionStartTime, sessionEndTime, 
     return { durationMinutes: 0, durationFormatted: "0 mins" };
   }
 
-  // Sort segments by start time
   validSegments.sort((a, b) => a[0] - b[0]);
 
-  // Merge overlapping or contiguous segments
   const mergedSegments = [];
   for (const seg of validSegments) {
     if (mergedSegments.length === 0) {
@@ -122,7 +110,6 @@ function calculateAccurateDuration(intervals, sessionStartTime, sessionEndTime, 
     }
   }
 
-  // Sum merged durations
   let totalMs = 0;
   for (const [s, e] of mergedSegments) {
     totalMs += (e - s);
@@ -135,11 +122,11 @@ function calculateAccurateDuration(intervals, sessionStartTime, sessionEndTime, 
   const minutes = durationMinutes % 60;
   let durationFormatted = "";
   if (hours > 0 && minutes > 0) {
-    durationFormatted = `${hours} hr${hours > 1 ? "s" : ""} ${minutes} mins`;
+    durationFormatted = hours + " hr" + (hours > 1 ? "s" : "") + " " + minutes + " mins";
   } else if (hours > 0) {
-    durationFormatted = `${hours} hr${hours > 1 ? "s" : ""}`;
+    durationFormatted = hours + " hr" + (hours > 1 ? "s" : "");
   } else {
-    durationFormatted = `${minutes} mins`;
+    durationFormatted = minutes + " mins";
   }
 
   return { durationMinutes, durationFormatted };
@@ -148,7 +135,9 @@ function calculateAccurateDuration(intervals, sessionStartTime, sessionEndTime, 
 function ensureRoomFields(session) {
   const id = session._id;
   if (!session.roomName) session.roomName = classroomRoomName(id);
-  session.meetingLink = classroomPath(id);
+  if (!session.meetingLink) {
+    session.meetingLink = classroomPath(id);
+  }
   return session;
 }
 
@@ -185,13 +174,17 @@ async function teacherCheckIn(session) {
   if (!session.teacherAttendance.checkInTime) {
     session.set("teacherAttendance.checkInTime", now);
   }
+  session.set("teacherAttendance.lastHeartbeat", now);
 
-  // Open an interval if no unclosed interval exists
-  const openInterval = session.teacherAttendance.intervals.find((inv) => !inv.checkOutTime);
+  let openInterval = session.teacherAttendance.intervals.find((inv) => !inv.checkOutTime);
   if (!openInterval) {
-    session.teacherAttendance.intervals.push({
+    openInterval = {
       checkInTime: now,
-    });
+      lastHeartbeat: now,
+    };
+    session.teacherAttendance.intervals.push(openInterval);
+  } else {
+    openInterval.lastHeartbeat = now;
   }
 
   session.set("teacherAttendance.checkOutTime", null);
@@ -218,41 +211,48 @@ function resolveAutoStatus(session, checkOutTime) {
     scheduledMins
   );
 
-  const minRequired = Math.max(MIN_CONDUCTED_MINUTES, scheduledMins * MIN_CONDUCTED_RATIO);
-
-  if (dur.durationMinutes >= minRequired) {
-    return { status: "conducted", notConductedReason: "" };
+  const studentsPresent = (session.studentAttendance || []).some((s) => s.present);
+  if (!studentsPresent) {
+    return { status: "not_conducted", notConductedReason: "Student Not Present" };
   }
 
-  return {
-    status: "not_conducted",
-    notConductedReason: session.notConductedReason || "Others",
-  };
+  const requiredMinutes = Math.min(
+    scheduledMins * MIN_CONDUCTED_RATIO,
+    MIN_CONDUCTED_MINUTES
+  );
+  if (dur.durationMinutes < requiredMinutes) {
+    return { status: "not_conducted", notConductedReason: "Others" };
+  }
+
+  return { status: "conducted" };
 }
 
 async function teacherCheckOut(session) {
-  if (!session.teacherAttendance?.checkInTime) {
-    const error = new Error("Class has not started yet");
-    error.statusCode = 400;
-    error.code = "NOT_STARTED";
-    throw error;
-  }
-
   const checkOutTime = new Date();
-  session.set("teacherAttendance.checkOutTime", checkOutTime);
 
+  if (!session.teacherAttendance) {
+    session.teacherAttendance = { intervals: [] };
+  }
   if (!Array.isArray(session.teacherAttendance.intervals)) {
     session.teacherAttendance.intervals = [];
+  }
+
+  session.set("teacherAttendance.checkOutTime", checkOutTime);
+  session.set("teacherAttendance.lastHeartbeat", checkOutTime);
+
+  if (session.teacherAttendance.intervals.length === 0) {
     if (session.teacherAttendance.checkInTime) {
       session.teacherAttendance.intervals.push({
         checkInTime: session.teacherAttendance.checkInTime,
         checkOutTime,
+        lastHeartbeat: checkOutTime,
       });
     }
   } else {
     const openInterval = session.teacherAttendance.intervals.find((inv) => !inv.checkOutTime);
     if (openInterval) {
       openInterval.checkOutTime = checkOutTime;
+      openInterval.lastHeartbeat = checkOutTime;
     }
   }
 
@@ -266,7 +266,6 @@ async function teacherCheckOut(session) {
   session.set("teacherAttendance.durationMinutes", teacherDur.durationMinutes);
   session.set("teacherAttendance.durationFormatted", teacherDur.durationFormatted);
 
-  // Auto-resolve status
   const current = String(session.status || "").toLowerCase();
   if (current === "ongoing" || current === "scheduled" || current === "pending") {
     const resolved = resolveAutoStatus(session, checkOutTime);
@@ -278,11 +277,18 @@ async function teacherCheckOut(session) {
     }
   }
 
-  // Auto check-out all students currently in class
   if (Array.isArray(session.studentAttendance)) {
     for (const rec of session.studentAttendance) {
       if (rec.present && !rec.leftAt) {
-        rec.leftAt = checkOutTime;
+        let studentLeaveTime = checkOutTime;
+        if (rec.lastHeartbeat) {
+          const hbDiff = checkOutTime.getTime() - new Date(rec.lastHeartbeat).getTime();
+          if (hbDiff > 120000) {
+            studentLeaveTime = new Date(rec.lastHeartbeat);
+          }
+        }
+
+        rec.leftAt = studentLeaveTime;
         rec.markedAt = checkOutTime;
 
         if (!Array.isArray(rec.intervals)) {
@@ -290,13 +296,15 @@ async function teacherCheckOut(session) {
           if (rec.joinedAt) {
             rec.intervals.push({
               checkInTime: rec.joinedAt,
-              checkOutTime,
+              checkOutTime: studentLeaveTime,
+              lastHeartbeat: studentLeaveTime,
             });
           }
         } else {
           const openStudentInv = rec.intervals.find((inv) => !inv.checkOutTime);
           if (openStudentInv) {
-            openStudentInv.checkOutTime = checkOutTime;
+            openStudentInv.checkOutTime = studentLeaveTime;
+            openStudentInv.lastHeartbeat = studentLeaveTime;
           }
         }
 
@@ -321,6 +329,7 @@ async function teacherCheckOut(session) {
               intervals: rec.intervals,
               durationMinutes: studentDur.durationMinutes,
               durationFormatted: studentDur.durationFormatted,
+              lastHeartbeat: studentLeaveTime,
               markedAt: checkOutTime,
             },
             { upsert: true }
@@ -359,25 +368,29 @@ async function markStudentPresent(session, studentId) {
       present: true,
       joinedAt: now,
       markedAt: now,
-      intervals: [{ checkInTime: now }],
+      lastHeartbeat: now,
+      intervals: [{ checkInTime: now, lastHeartbeat: now }],
     };
     session.studentAttendance.push(existing);
   } else {
     existing.present = true;
     existing.markedAt = now;
+    existing.lastHeartbeat = now;
     if (!existing.joinedAt) existing.joinedAt = now;
     existing.leftAt = undefined;
 
     if (!Array.isArray(existing.intervals)) {
       existing.intervals = [];
       if (existing.joinedAt) {
-        existing.intervals.push({ checkInTime: existing.joinedAt });
+        existing.intervals.push({ checkInTime: existing.joinedAt, lastHeartbeat: now });
       }
     }
 
     const openInterval = existing.intervals.find((inv) => !inv.checkOutTime);
     if (!openInterval) {
-      existing.intervals.push({ checkInTime: now });
+      existing.intervals.push({ checkInTime: now, lastHeartbeat: now });
+    } else {
+      openInterval.lastHeartbeat = now;
     }
   }
 
@@ -403,6 +416,7 @@ async function markStudentPresent(session, studentId) {
         intervals: existing.intervals,
         durationMinutes: dur.durationMinutes,
         durationFormatted: dur.durationFormatted,
+        lastHeartbeat: now,
         markedAt: now,
       },
       { upsert: true }
@@ -426,6 +440,7 @@ async function markStudentLeft(session, studentId) {
     const leftTime = new Date();
     existing.leftAt = leftTime;
     existing.markedAt = leftTime;
+    existing.lastHeartbeat = leftTime;
 
     if (!Array.isArray(existing.intervals)) {
       existing.intervals = [];
@@ -433,12 +448,14 @@ async function markStudentLeft(session, studentId) {
         existing.intervals.push({
           checkInTime: existing.joinedAt,
           checkOutTime: leftTime,
+          lastHeartbeat: leftTime,
         });
       }
     } else {
       const openInterval = existing.intervals.find((inv) => !inv.checkOutTime);
       if (openInterval) {
         openInterval.checkOutTime = leftTime;
+        openInterval.lastHeartbeat = leftTime;
       }
     }
 
@@ -460,6 +477,7 @@ async function markStudentLeft(session, studentId) {
           intervals: existing.intervals,
           durationMinutes: dur.durationMinutes,
           durationFormatted: dur.durationFormatted,
+          lastHeartbeat: leftTime,
           markedAt: leftTime,
         },
         { upsert: true }
@@ -471,6 +489,128 @@ async function markStudentLeft(session, studentId) {
     await session.save();
   }
   return session;
+}
+
+async function recordHeartbeat(session, user) {
+  if (!session || !user) return { success: false, message: "Missing session or user" };
+
+  const now = new Date();
+  const scheduledMins = parseDurationMinutes(session.duration);
+
+  if (user.role === "teacher") {
+    if (!session.teacherAttendance) session.teacherAttendance = { intervals: [] };
+    if (!Array.isArray(session.teacherAttendance.intervals)) session.teacherAttendance.intervals = [];
+
+    if (!session.teacherAttendance.checkInTime) {
+      session.set("teacherAttendance.checkInTime", now);
+    }
+    session.set("teacherAttendance.lastHeartbeat", now);
+
+    let openInterval = session.teacherAttendance.intervals.find((inv) => !inv.checkOutTime);
+    if (!openInterval) {
+      openInterval = { checkInTime: now, lastHeartbeat: now };
+      session.teacherAttendance.intervals.push(openInterval);
+    } else {
+      openInterval.lastHeartbeat = now;
+    }
+
+    const dur = calculateAccurateDuration(
+      session.teacherAttendance.intervals,
+      session.startTime,
+      session.endTime,
+      scheduledMins
+    );
+    session.set("teacherAttendance.durationMinutes", dur.durationMinutes);
+    session.set("teacherAttendance.durationFormatted", dur.durationFormatted);
+
+    if (session.status !== "ongoing" && session.status !== "conducted" && session.status !== "completed") {
+      session.status = "ongoing";
+      session.isActive = true;
+    }
+
+    await session.save();
+    return {
+      success: true,
+      role: "teacher",
+      durationMinutes: dur.durationMinutes,
+      durationFormatted: dur.durationFormatted,
+      isLive: true,
+    };
+  }
+
+  if (user.role === "student") {
+    if (!Array.isArray(session.studentAttendance)) session.studentAttendance = [];
+
+    let existing = session.studentAttendance.find(
+      (r) => String(r.student?._id || r.student) === String(user.profileId)
+    );
+
+    if (!existing) {
+      existing = {
+        student: user.profileId,
+        present: true,
+        joinedAt: now,
+        lastHeartbeat: now,
+        intervals: [{ checkInTime: now, lastHeartbeat: now }],
+      };
+      session.studentAttendance.push(existing);
+    } else {
+      existing.present = true;
+      existing.lastHeartbeat = now;
+      if (!existing.joinedAt) existing.joinedAt = now;
+      existing.leftAt = undefined;
+
+      if (!Array.isArray(existing.intervals)) existing.intervals = [];
+      let openInterval = existing.intervals.find((inv) => !inv.checkOutTime);
+      if (!openInterval) {
+        openInterval = { checkInTime: now, lastHeartbeat: now };
+        existing.intervals.push(openInterval);
+      } else {
+        openInterval.lastHeartbeat = now;
+      }
+    }
+
+    const dur = calculateAccurateDuration(
+      existing.intervals,
+      session.startTime,
+      session.endTime,
+      scheduledMins
+    );
+    existing.durationMinutes = dur.durationMinutes;
+    existing.durationFormatted = dur.durationFormatted;
+
+    try {
+      const Attendance = require("../models/Attendance");
+      await Attendance.findOneAndUpdate(
+        { student: user.profileId, session: session._id },
+        {
+          student: user.profileId,
+          session: session._id,
+          course: session.course,
+          present: true,
+          intervals: existing.intervals,
+          durationMinutes: dur.durationMinutes,
+          durationFormatted: dur.durationFormatted,
+          lastHeartbeat: now,
+          markedAt: now,
+        },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error("Heartbeat attendance update error:", e.message);
+    }
+
+    await session.save();
+    return {
+      success: true,
+      role: "student",
+      durationMinutes: dur.durationMinutes,
+      durationFormatted: dur.durationFormatted,
+      isLive: isClassLive(session),
+    };
+  }
+
+  return { success: true };
 }
 
 async function getParticipantName(user, fallback) {
@@ -516,6 +656,7 @@ module.exports = {
   teacherCheckOut,
   markStudentPresent,
   markStudentLeft,
+  recordHeartbeat,
   getParticipantName,
   loadSessionForClassroom,
   resolveAutoStatus,
