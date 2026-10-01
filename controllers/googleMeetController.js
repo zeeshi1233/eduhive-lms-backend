@@ -73,7 +73,10 @@ async function assertSessionAccess(user, session) {
   if (user.role === "admin") return true;
 
   if (user.role === "teacher") {
-    if (String(session.instructor) !== String(user.profileId)) {
+    const instructorId = String(session.instructor?._id || session.instructor || "");
+    const teacherId = String(session.teacher?._id || session.teacher || "");
+    const currentTeacherId = String(user.profileId || user.id || "");
+    if (instructorId !== currentTeacherId && teacherId !== currentTeacherId) {
       const error = new Error("You are not assigned to this class");
       error.statusCode = 403;
       error.code = "NOT_ASSIGNED";
@@ -235,16 +238,19 @@ exports.joinSessionRedirect = async (req, res) => {
     }
 
     const targetMeetingUrl =
+      session.meetingUrl ||
       session.googleMeetLink ||
       (session.meetingLink && session.meetingLink.startsWith("http") ? session.meetingLink : null) ||
       (session.link && session.link.startsWith("http") ? session.link : null);
 
-    if (req.query.direct === "true" && targetMeetingUrl) {
+    // Automatic Redirect: Immediately redirect to actual meeting URL (Google Meet / Zoom)
+    if (targetMeetingUrl) {
       return res.redirect(targetMeetingUrl);
     }
 
+    // Fallback if no external video meeting link is set on the session
     return res.redirect(
-      frontendUrl + "/classroom/" + sessionId + "?autoLaunch=true&token=" + encodeURIComponent(token)
+      frontendUrl + "/classroom/" + sessionId + "?token=" + encodeURIComponent(token)
     );
   } catch (err) {
     console.error("[Redirect Join Error]:", err.message);
