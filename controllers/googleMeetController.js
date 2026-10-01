@@ -1,52 +1,94 @@
 const Teacher = require("../models/Teacher");
+const {
+  getGoogleOAuthClient,
+  getTeacherGoogleAuthUrl,
+  getAdminGoogleAuthUrl,
+  syncGoogleMeetAttendance,
+} = require("../utils/googleMeet");
+
+function frontendBaseUrl() {
+  return (
+    process.env.FRONTEND_URL ||
+    process.env.CLIENT_URL ||
+    "https://eduhive-lms.vercel.app"
+  );
+}
+
+function redirectToFrontend(res, pathWithQuery) {
+  const base = frontendBaseUrl().replace(/\/$/, "");
+  return res.redirect(`${base}${pathWithQuery.startsWith("/") ? "" : "/"}${pathWithQuery}`);
+}
 
 // Teacher-level: generate Google OAuth URL
 exports.teacherGoogleAuthUrl = (req, res) => {
-  const { getTeacherGoogleAuthUrl } = require("../utils/googleMeet");
-  const teacherId = req.user?.profileId || req.query.teacherId;
-  const authUrl = getTeacherGoogleAuthUrl(teacherId);
-  res.status(200).json({ authUrl });
+  try {
+    if (req.user?.role !== "teacher" && req.user?.role !== "admin") {
+      return res.status(403).json({ message: "Only teachers/admins can connect Google" });
+    }
+    const teacherId =
+      req.user?.role === "teacher"
+        ? req.user.profileId
+        : req.query.teacherId || req.user?.profileId;
+
+    if (!teacherId) {
+      return res.status(400).json({ message: "teacherId is required" });
+    }
+
+    const authUrl = getTeacherGoogleAuthUrl(String(teacherId));
+    res.status(200).json({ authUrl });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Failed to create Google auth URL" });
+  }
 };
 
-// Teacher-level: handle OAuth callback — saves teacher's refresh token to DB
+// Teacher-level callback (legacy path) — same logic as unified /api/google/callback
 exports.teacherGoogleConnect = async (req, res) => {
+  return exports.googleOAuthCallback(req, res);
+};
+
+async function saveTeacherGoogleTokens(teacherId, tokens, googleEmail) {
+  const update = {
+    googleConnected: true,
+    googleEmail: googleEmail || "",
+  };
+  if (tokens.refresh_token) update.googleRefreshToken = tokens.refresh_token;
+  if (tokens.access_token) update.googleAccessToken = tokens.access_token;
+  if (tokens.expiry_date) update.googleTokenExpiry = new Date(tokens.expiry_date);
+
+  return Teacher.findByIdAndUpdate(teacherId, update, { new: true }).select(
+    "name googleEmail googleConnected googleTokenExpiry"
+  );
+}
+
+exports.disconnectTeacherGoogle = async (req, res) => {
   try {
-    const { code, state: teacherId } = req.query;
-    if (!code || !teacherId) {
-      return res.status(400).json({ message: "Missing code or teacher state" });
+    const teacherId =
+      req.user?.role === "teacher"
+        ? req.user.profileId
+        : req.body?.teacherId || req.query.teacherId;
+
+    if (!teacherId) {
+      return res.status(400).json({ message: "teacherId is required" });
     }
 
-    const { getGoogleOAuthClient } = require("../utils/googleMeet");
-    const oauth2Client = getGoogleOAuthClient();
-    const { tokens } = await oauth2Client.getToken(code);
-    if (tokens.refresh_token) {
-      process.env.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
+    if (
+      req.user?.role === "teacher" &&
+      String(req.user.profileId) !== String(teacherId)
+    ) {
+      return res.status(403).json({ message: "Cannot disconnect another teacher" });
     }
-
-    if (!tokens.refresh_token) {
-      return res.status(400).json({
-        message: "No refresh_token received. Please ensure you are granting offline access.",
-      });
-    }
-
-    oauth2Client.setCredentials(tokens);
-    const oauth2 = require("googleapis").google.oauth2({ version: "v2", auth: oauth2Client });
-    const me = await oauth2.userinfo.get();
-    const googleEmail = me.data.email || "";
 
     await Teacher.findByIdAndUpdate(teacherId, {
-      googleRefreshToken: tokens.refresh_token,
-      googleEmail,
-      googleConnected: true,
+      googleAccessToken: "",
+      googleRefreshToken: "",
+      googleTokenExpiry: null,
+      googleEmail: "",
+      googleConnected: false,
     });
 
-    res.status(200).json({
-      message: "Google account connected! Teacher is now the host for all their sessions.",
-      googleEmail,
-    });
+    res.status(200).json({ message: "Google account disconnected" });
   } catch (error) {
-    console.error("Teacher Google connect error:", error);
-    res.status(500).json({ message: "Failed to connect Google account", error: error.message });
+    res.status(500).json({ message: error.message || "Failed to disconnect Google" });
   }
 };
 
@@ -67,7 +109,6 @@ const {
   isSessionExpired,
   isClassLive,
 } = require("../utils/classroom");
-const { getGoogleOAuthClient, syncGoogleMeetAttendance } = require("../utils/googleMeet");
 
 async function assertSessionAccess(user, session) {
   if (user.role === "admin") return true;
@@ -198,7 +239,11 @@ exports.joinSessionRedirect = async (req, res) => {
     req.cookies?.token;
 
   if (!token) {
-    return res.redirect(frontendUrl + "/classroom/" + sessionId);
+    return res.redirect(
+      frontendUrl +
+        "/?error=login_required&redirect=" +
+        encodeURIComponent("/classroom/" + sessionId + "?autoLaunch=true")
+    );
   }
 
   try {
@@ -402,30 +447,112 @@ exports.syncAttendance = async (req, res) => {
 };
 
 exports.getGoogleAuthUrl = (req, res) => {
-  const oauth2Client = getGoogleOAuthClient();
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: [
-      "https://www.googleapis.com/auth/meetings.space.created",
-      "https://www.googleapis.com/auth/meetings.space.readonly",
-      "https://www.googleapis.com/auth/calendar.events",
-    ],
-    prompt: "consent",
-  });
-  res.status(200).json({ authUrl });
+  try {
+    const authUrl = getAdminGoogleAuthUrl();
+    res.status(200).json({ authUrl });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Failed to create Google auth URL" });
+  }
 };
 
+/**
+ * Unified OAuth callback for admin + teacher.
+ * Google Console redirect URI must point here:
+ *   /api/google/callback
+ * Teacher flow uses state=`teacher:<teacherId>`.
+ */
 exports.googleOAuthCallback = async (req, res) => {
+  const wantsJson = String(req.query.format || "").toLowerCase() === "json";
+
   try {
-    const { code } = req.query;
+    const { code, state = "" } = req.query;
+    if (!code) {
+      if (wantsJson) return res.status(400).json({ message: "Missing OAuth code" });
+      return redirectToFrontend(res, "/teacher-profile?google=error&reason=missing_code");
+    }
+
     const oauth2Client = getGoogleOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
 
-    res.status(200).json({
-      message: "OAuth successful! Copy the refresh token below and add it to your .env as GOOGLE_REFRESH_TOKEN",
-      refreshToken: tokens.refresh_token,
+    const oauth2 = require("googleapis").google.oauth2({
+      version: "v2",
+      auth: oauth2Client,
     });
+    const me = await oauth2.userinfo.get();
+    const googleEmail = me.data?.email || "";
+
+    const stateStr = String(state || "");
+    const isTeacherFlow =
+      stateStr.startsWith("teacher:") || mongoose.Types.ObjectId.isValid(stateStr);
+
+    if (isTeacherFlow) {
+      const teacherId = stateStr.startsWith("teacher:")
+        ? stateStr.slice("teacher:".length)
+        : stateStr;
+
+      if (!tokens.refresh_token) {
+        // Sometimes Google omits refresh_token on re-consent; keep prior token if present
+        const existing = await Teacher.findById(teacherId).select("+googleRefreshToken");
+        if (!existing?.googleRefreshToken) {
+          if (wantsJson) {
+            return res.status(400).json({
+              message:
+                "No refresh_token received. Revoke app access in Google Account and reconnect with consent.",
+            });
+          }
+          return redirectToFrontend(
+            res,
+            "/teacher-profile?google=error&reason=no_refresh_token"
+          );
+        }
+        tokens.refresh_token = existing.googleRefreshToken;
+      }
+
+      const teacher = await saveTeacherGoogleTokens(teacherId, tokens, googleEmail);
+      if (wantsJson) {
+        return res.status(200).json({
+          message: "Google account connected! Teacher is now the host for their sessions.",
+          googleEmail,
+          teacher,
+        });
+      }
+      return redirectToFrontend(
+        res,
+        `/teacher-profile?google=connected&email=${encodeURIComponent(googleEmail)}`
+      );
+    }
+
+    // Admin / env refresh-token flow
+    if (tokens.refresh_token) {
+      process.env.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
+    }
+
+    if (wantsJson) {
+      return res.status(200).json({
+        message:
+          "OAuth successful! Copy the refresh token below and add it to your .env as GOOGLE_REFRESH_TOKEN",
+        refreshToken: tokens.refresh_token || null,
+        googleEmail,
+      });
+    }
+
+    return redirectToFrontend(
+      res,
+      `/admin-profile?google=connected&email=${encodeURIComponent(googleEmail)}&hasRefresh=${Boolean(
+        tokens.refresh_token
+      )}`
+    );
   } catch (error) {
-    res.status(500).json({ message: "Google OAuth failed", error: error.message });
+    console.error("Google OAuth callback error:", error);
+    if (wantsJson) {
+      return res
+        .status(500)
+        .json({ message: "Google OAuth failed", error: error.message });
+    }
+    return redirectToFrontend(
+      res,
+      `/teacher-profile?google=error&reason=${encodeURIComponent(error.message || "oauth_failed")}`
+    );
   }
 };

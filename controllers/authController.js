@@ -246,6 +246,11 @@ exports.getCurrentUser = async (req, res) => {
       return res.status(404).json({ message: "User profile not found" })
     }
 
+    const profileObj = profile.toObject()
+    // Never expose OAuth secrets to the client
+    delete profileObj.googleRefreshToken
+    delete profileObj.googleAccessToken
+
     res.status(200).json({
       user: {
         id: auth._id,
@@ -253,7 +258,9 @@ exports.getCurrentUser = async (req, res) => {
         email: auth.email,
         role: auth.role,
         isActive: auth.isActive,
-        ...profile.toObject(),
+        ...profileObj,
+        googleConnected: Boolean(profileObj.googleConnected),
+        googleEmail: profileObj.googleEmail || "",
       },
     })
   } catch (error) {

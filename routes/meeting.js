@@ -11,6 +11,7 @@ const {
   googleOAuthCallback,
   teacherGoogleAuthUrl,
   teacherGoogleConnect,
+  disconnectTeacherGoogle,
 } = require("../controllers/googleMeetController");
 const { exportSessionsExcel } = require("../controllers/adminController");
 const { verifyToken } = require("../middleware/auth");
@@ -35,12 +36,13 @@ router.post("/classroom/:sessionId/heartbeat", verifyToken, sessionHeartbeat);
 router.get("/classroom/:sessionId", verifyToken, getClassroom);
 router.post("/classroom/:sessionId/sync-attendance", verifyToken, syncAttendance);
 
-// Google OAuth routes (Admin)
+// Google OAuth routes (Admin + unified callback)
 router.get("/google/auth", getGoogleAuthUrl);
 router.get("/google/callback", googleOAuthCallback);
 
 // Google OAuth routes (Teacher — become Host)
 router.get("/teacher/google/auth", verifyToken, teacherGoogleAuthUrl);
 router.get("/teacher/google/callback", teacherGoogleConnect);
+router.post("/teacher/google/disconnect", verifyToken, disconnectTeacherGoogle);
 
 module.exports = router;

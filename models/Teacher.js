@@ -40,8 +40,10 @@ const TeacherSchema = new mongoose.Schema(
 
     isActive: { type: Boolean, default: true },
     
-    // Google Workspace OAuth — stored so teacher becomes the Host
-    googleRefreshToken: { type: String, default: "" },
+    // Google OAuth tokens — teacher becomes Meet/Calendar host
+    googleAccessToken: { type: String, default: "", select: false },
+    googleRefreshToken: { type: String, default: "", select: false },
+    googleTokenExpiry: { type: Date, default: null },
     googleEmail: { type: String, default: "" },
     googleConnected: { type: Boolean, default: false },
   },

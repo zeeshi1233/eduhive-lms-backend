@@ -1,5 +1,11 @@
 const express = require("express")
 const { register, getCurrentUser, loginTeacher, loginStudent } = require("../controllers/authController")
+const {
+  getGoogleAuthUrl,
+  googleOAuthCallback,
+  teacherGoogleAuthUrl,
+  disconnectTeacherGoogle,
+} = require("../controllers/googleMeetController")
 const { verifyToken } = require("../middleware/auth")
 const { validateLoginInput, validateRegisterInput, handleValidationErrors } = require("../middleware/validation")
 const { upload } = require("../utils/cloudinary")
@@ -23,5 +29,11 @@ router.post("/student-login", validateLoginInput, handleValidationErrors, loginS
 
 // Current logged-in user
 router.get("/me", verifyToken, getCurrentUser)
+
+// Google OAuth aliases (also available under /api/google/* and /api/teacher/google/*)
+router.get("/google", getGoogleAuthUrl)
+router.get("/google/callback", googleOAuthCallback)
+router.get("/google/teacher", verifyToken, teacherGoogleAuthUrl)
+router.post("/google/disconnect", verifyToken, disconnectTeacherGoogle)
 
 module.exports = router

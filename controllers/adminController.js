@@ -1,5 +1,5 @@
 const XLSX = require("xlsx");
-const { createGoogleMeetSpaceForTeacher } = require("../utils/googleMeet");
+const { createSessionGoogleMeet } = require("../utils/googleMeet");
 const { createMeetSpaceAsTeacher } = require("../utils/googleMeetServiceAccount");
 const Teacher = require("../models/Teacher")
 const Student = require("../models/Student")
@@ -1078,7 +1078,9 @@ exports.createSession = async (req, res) => {
 
     const [course, teacher] = await Promise.all([
       Course.findById(courseId),
-      Teacher.findById(teacherId),
+      Teacher.findById(teacherId).select(
+        "+googleRefreshToken +googleAccessToken googleEmail googleConnected googleTokenExpiry"
+      ),
     ])
     if (!course) return res.status(404).json({ message: "Course not found" })
     if (!teacher) return res.status(404).json({ message: "Teacher not found" })
@@ -1106,28 +1108,46 @@ exports.createSession = async (req, res) => {
     }
     
     try {
-      // Try Service Account (teacher as host) first, fallback to OAuth token
-      let meet;
+      // Prefer Calendar API Meet (hangoutLink). Fallbacks: service account space, OAuth space.
+      let meet = null;
       try {
+        meet = await createSessionGoogleMeet({
+          teacher,
+          title: newSession.title,
+          startTime: newSession.startTime,
+          endTime: newSession.endTime,
+          description: newSession.description || newSession.topic || "",
+        });
+        console.log(
+          `[Session] Meet created via Calendar/OAuth. Host teacher connected: ${Boolean(
+            teacher?.googleConnected
+          )}`
+        );
+      } catch (calendarErr) {
+        console.warn("[Session] Calendar/OAuth Meet failed:", calendarErr.message);
         const teacherEmail = teacher?.googleEmail || "";
-        if (teacherEmail && (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)) {
+        if (
+          teacherEmail &&
+          (process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+            process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)
+        ) {
           meet = await createMeetSpaceAsTeacher(teacherEmail);
           console.log(`[Session] Meet created via Service Account. Host: ${teacherEmail}`);
         } else {
-          meet = await createGoogleMeetSpaceForTeacher(teacher);
-          console.log(`[Session] Meet created via OAuth token.`);
+          throw calendarErr;
         }
-      } catch (saErr) {
-        console.warn("[Session] Service Account failed, falling back to OAuth:", saErr.message);
-        meet = await createGoogleMeetSpaceForTeacher(teacher);
       }
+
       if (meet && meet.meetingUri) {
         newSession.googleMeetSpace = meet.spaceName || "";
         newSession.googleMeetLink = meet.meetingUri;
         newSession.meetingLink = meet.meetingUri;
         newSession.link = meet.meetingUri;
+        if (meet.calendarEventId) {
+          newSession.googleCalendarEventId = meet.calendarEventId;
+        }
       }
-    } catch(e) {
+    } catch (e) {
       console.warn("[Session] Failed to create google meet automatically:", e.message);
     }
     await newSession.save()

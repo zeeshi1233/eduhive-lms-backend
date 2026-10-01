@@ -96,6 +96,11 @@ const sessionSchema = new mongoose.Schema(
       default: "",
     },
 
+    googleCalendarEventId: {
+      type: String,
+      default: "",
+    },
+
     googleMeetLink: {
       type: String,
       default: "",
